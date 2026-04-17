@@ -3,12 +3,17 @@ import { ROOMS, ROOM_DIMENSIONS } from "../data/rooms";
 import { GameState } from "../core/GameState";
 import { EventBus } from "../core/EventBus";
 import { EnemyDemon } from "../entities/EnemyDemon";
+import { EnemyAngel } from "../entities/EnemyAngel";
 
 const BIG_PLATFORM_KEYS = ["platform-big-1", "platform-big-2"];
 const MEDIUM_PLATFORM_KEYS = ["platform-medium-1", "platform-medium-2", "platform-medium-3"];
 const CHEST_COIN_REWARD = 25;
 const CHEST_SCALE = 0.21;
 const CHEST_VISIBLE_BOTTOM_ORIGIN_Y = 370 / 409;
+const ENEMY_FACTORIES = {
+  angel: EnemyAngel,
+  demon: EnemyDemon
+};
 
 export class RoomManager {
   constructor(scene, player, abilitySystem) {
@@ -71,7 +76,8 @@ export class RoomManager {
     }
 
     for (const enemyDef of room.enemies ?? []) {
-      const enemy = new EnemyDemon(this.scene, enemyDef.x, enemyDef.y, enemyDef.patrol);
+      const EnemyType = ENEMY_FACTORIES[enemyDef.type] ?? EnemyDemon;
+      const enemy = new EnemyType(this.scene, enemyDef.x, enemyDef.y, enemyDef.patrol);
       this.enemies.add(enemy);
     }
 

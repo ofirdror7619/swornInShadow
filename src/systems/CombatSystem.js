@@ -10,6 +10,9 @@ const FLAME_ORBIT_RADIUS = FLAME_AURA_RADIUS - 8;
 const FLAME_ORBIT_Y_SCALE = 0.72;
 const FLAME_ORBIT_SPEED = 0.0042;
 const PLAYER_IFRAME_MS = 680;
+const AURA_HIT_DAMAGE = 10;
+const AURA_HIT_DAMAGE_ANGEL = 1;
+const AURA_HIT_INTERVAL_MS = 160;
 
 export class CombatSystem {
   constructor(scene, player, roomManager) {
@@ -20,6 +23,7 @@ export class CombatSystem {
     this.auraActiveLeft = 0;
     this.auraCooldownLeft = 0;
     this.flameOrbitTime = 0;
+    this.lastAuraHitAtByEnemyId = new Map();
 
     this.keys = scene.input.keyboard.addKeys({
       flameSpace: "SPACE",
@@ -98,6 +102,7 @@ export class CombatSystem {
     this.auraZone.body.enable = true;
     this.flameOrbitTime = 0;
     this.setFlameVisible(true);
+    this.setAuraEyesActive(true);
     this.syncAuraToPlayer();
     EventBus.emit("world-hint", "Flame aura unleashed");
     this.emitAuraUpdated();
@@ -106,7 +111,17 @@ export class CombatSystem {
   deactivateFlameAura() {
     this.auraZone.body.enable = false;
     this.setFlameVisible(false);
+    this.setAuraEyesActive(false);
     this.emitAuraUpdated();
+  }
+
+  setAuraEyesActive(active) {
+    if (!this.player?.eyes) return;
+    if (active) {
+      this.player.eyes.setTint(0xff2424);
+      return;
+    }
+    this.player.eyes.clearTint();
   }
 
   syncAuraToPlayer() {
@@ -143,16 +158,22 @@ export class CombatSystem {
 
   handleAuraTouch(enemy) {
     if (!enemy?.active || enemy.isDead || this.auraActiveLeft <= 0) return;
+    const enemyId = enemy.name || String(enemy.body?.id ?? enemy.x + enemy.y);
+    const now = this.scene.time.now;
+    const lastHitAt = this.lastAuraHitAtByEnemyId.get(enemyId) ?? -Infinity;
+    if (now - lastHitAt < AURA_HIT_INTERVAL_MS) return;
+    this.lastAuraHitAtByEnemyId.set(enemyId, now);
+
     const hitDir = new Phaser.Math.Vector2(enemy.x - this.player.x, enemy.y - this.player.y);
     if (hitDir.lengthSq() < 0.0001) {
       hitDir.set(1, 0);
     } else {
       hitDir.normalize();
     }
-    const dead = enemy.takeDamage(9999, hitDir);
+    const auraDamage = enemy.enemyType === "angel" ? AURA_HIT_DAMAGE_ANGEL : AURA_HIT_DAMAGE;
+    const dead = enemy.takeDamage(auraDamage, hitDir);
     if (dead) {
       this.scene.cameras.main.shake(80, 0.0022);
-      this.scene.add.image(enemy.x, enemy.y, "fx-red").setScale(2.6).setAlpha(0.9).setBlendMode("ADD");
       EventBus.emit("enemy-killed");
     }
   }
@@ -170,7 +191,11 @@ export class CombatSystem {
     const damage = enemy.contactDamage ?? 12;
     GameState.health = Math.max(0, GameState.health - damage);
     EventBus.emit("health-updated", GameState.health);
-    EventBus.emit("world-hint", `You were hit (-${damage})`);
+    if (enemy.enemyType === "angel") {
+      EventBus.emit("world-hint", `Angel strike! Vital -${damage}`);
+    } else {
+      EventBus.emit("world-hint", `You were hit (-${damage})`);
+    }
 
     const away = new Phaser.Math.Vector2(this.player.x - enemy.x, this.player.y - enemy.y);
     if (away.lengthSq() < 0.0001) {
@@ -224,6 +249,9 @@ export class CombatSystem {
   setFlameVisible(visible) {
     this.flameSprites.forEach((sprite) => {
       sprite.setVisible(visible);
+      if (!visible) {
+        sprite.setAlpha(0);
+      }
     });
     this.flameTrailEmitters.forEach((emitter) => {
       if (visible) emitter.start();
@@ -256,6 +284,8 @@ export class CombatSystem {
   }
 
   destroy() {
+    this.setAuraEyesActive(false);
+    this.lastAuraHitAtByEnemyId.clear();
     this.auraZone?.destroy();
     this.flameSprites?.forEach((sprite) => {
       sprite.destroy();

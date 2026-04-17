@@ -42,6 +42,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     this.bodySprite.setScale(DEMON_SCALE);
     this.eyes.setScale(DEMON_SCALE);
     this.eyesBaseScale = DEMON_SCALE;
+    this.eyesAuraScaleBoost = 1;
+    this.eyesAuraAlphaBoost = 1;
     this.eyes.setBlendMode("ADD");
     this.visual.add([this.leftWing, this.rightWing, this.bodySprite, this.eyes]);
 

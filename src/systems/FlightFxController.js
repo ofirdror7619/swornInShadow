@@ -135,9 +135,11 @@ export class FlightFxController {
     const scale = 0.95 + Math.sin(this.eyeFlickerTime * 0.02) * 0.08;
 
     if (this.usesPlayerEyes) {
-      this.player.eyes.setAlpha(alpha);
+      const auraScaleBoost = this.player.eyesAuraScaleBoost ?? 1;
+      const auraAlphaBoost = this.player.eyesAuraAlphaBoost ?? 1;
+      this.player.eyes.setAlpha(Phaser.Math.Clamp(alpha * auraAlphaBoost, 0.25, 1));
       const eyesBaseScale = this.player.eyesBaseScale ?? 1;
-      this.player.eyes.setScale(eyesBaseScale * scale);
+      this.player.eyes.setScale(eyesBaseScale * scale * auraScaleBoost);
       return;
     }
 

@@ -2,12 +2,11 @@ import Phaser from "phaser";
 import demonBodyUrl from "../assets/images/demon/demon-body.png";
 import demonLeftWingUrl from "../assets/images/demon/demon-left-wing.png";
 import demonRightWingUrl from "../assets/images/demon/demon-right-wing.png";
-import demonTwoUrl from "../assets/images/demon-2/demon-2.png";
 import angelBodyUrl from "../assets/images/angel/angel-body.png";
 import angelLeftWingUrl from "../assets/images/angel/angel-left-wing.png";
 import angelRightWingUrl from "../assets/images/angel/angel-right-wing.png";
 import openingLogoUrl from "../assets/images/opening/logo.png";
-import roomBackgroundUrl from "../assets/images/background/background.png";
+import roomBackgroundUrl from "../assets/images/background/background-2.png";
 import treasureChestUrl from "../assets/images/objects/treasure-chest.png";
 import bigPlatform1Url from "../assets/images/platforms/big-platform-1.png";
 import bigPlatform2Url from "../assets/images/platforms/big-platform-2.png";
@@ -24,7 +23,6 @@ export class BootScene extends Phaser.Scene {
     this.load.image("demon-body", demonBodyUrl);
     this.load.image("demon-left-wing", demonLeftWingUrl);
     this.load.image("demon-right-wing", demonRightWingUrl);
-    this.load.image("demon-2-source", demonTwoUrl);
     this.load.image("angel-body", angelBodyUrl);
     this.load.image("angel-left-wing", angelLeftWingUrl);
     this.load.image("angel-right-wing", angelRightWingUrl);
@@ -105,98 +103,6 @@ export class BootScene extends Phaser.Scene {
     g.generateTexture("demon-eyes", 12, 6);
     g.clear();
 
-    this.makeDemonTwoTextures();
-
     g.destroy();
-  }
-
-  makeDemonTwoTextures() {
-    const source = this.textures.get("demon-2-source")?.getSourceImage();
-    if (!source) return;
-
-    this.makeMaskedCropTexture("demon-2-left-wing", source, 0, 22, 560, 560);
-    this.makeMaskedCropTexture("demon-2-right-wing", source, 808, 20, 600, 560);
-    this.makeMaskedCropTexture("demon-2-body", source, 420, 172, 560, 596);
-  }
-
-  makeMaskedCropTexture(key, source, sx, sy, sw, sh) {
-    if (this.textures.exists(key)) {
-      this.textures.remove(key);
-    }
-
-    const canvasTexture = this.textures.createCanvas(key, sw, sh);
-    const ctx = canvasTexture.getContext();
-    ctx.clearRect(0, 0, sw, sh);
-    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
-
-    const imageData = ctx.getImageData(0, 0, sw, sh);
-    const data = imageData.data;
-    const tileSize = 32;
-    const dark = [92, 92, 92];
-    const light = [176, 176, 176];
-    const bgCandidate = new Uint8Array(sw * sh);
-    const bgConnected = new Uint8Array(sw * sh);
-
-    for (let y = 0; y < sh; y += 1) {
-      for (let x = 0; x < sw; x += 1) {
-        const i = (y * sw + x) * 4;
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const checkerIndex = (Math.floor((x + sx) / tileSize) + Math.floor((y + sy) / tileSize)) % 2;
-        const target = checkerIndex === 0 ? dark : light;
-        const dr = Math.abs(r - target[0]);
-        const dg = Math.abs(g - target[1]);
-        const db = Math.abs(b - target[2]);
-        const grayish = Math.abs(r - g) <= 18 && Math.abs(g - b) <= 18 && Math.abs(r - b) <= 18;
-        const closeToChecker = dr <= 34 && dg <= 34 && db <= 34;
-        if (grayish && closeToChecker) {
-          bgCandidate[y * sw + x] = 1;
-        }
-      }
-    }
-
-    const queueX = [];
-    const queueY = [];
-    const enqueue = (x, y) => {
-      const idx = y * sw + x;
-      if (!bgCandidate[idx] || bgConnected[idx]) return;
-      bgConnected[idx] = 1;
-      queueX.push(x);
-      queueY.push(y);
-    };
-
-    for (let x = 0; x < sw; x += 1) {
-      enqueue(x, 0);
-      enqueue(x, sh - 1);
-    }
-    for (let y = 1; y < sh - 1; y += 1) {
-      enqueue(0, y);
-      enqueue(sw - 1, y);
-    }
-
-    while (queueX.length > 0) {
-      const x = queueX.pop();
-      const y = queueY.pop();
-      if (x > 0) enqueue(x - 1, y);
-      if (x < sw - 1) enqueue(x + 1, y);
-      if (y > 0) enqueue(x, y - 1);
-      if (y < sh - 1) enqueue(x, y + 1);
-    }
-
-    for (let y = 0; y < sh; y += 1) {
-      for (let x = 0; x < sw; x += 1) {
-        const idx = y * sw + x;
-        const i = idx * 4;
-        if (bgConnected[idx]) {
-          data[i + 3] = 0;
-        } else {
-          data[i + 3] = 255;
-        }
-      }
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-    canvasTexture.refresh();
   }
 }

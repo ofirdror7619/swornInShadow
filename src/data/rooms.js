@@ -27,7 +27,7 @@ export const ROOMS = {
       { x: 1300, y: 530, width: 220, height: 30 }
     ],
     abilityGates: [],
-    enemies: []
+    enemies: [{ type: "angel", x: 760, y: 760, patrol: { left: 620, right: 940, y: 760 } }]
   },
   shaft: {
     id: "shaft",
@@ -60,8 +60,9 @@ export const ROOMS = {
       }
     ],
     enemies: [
-      { x: 540, y: 540, patrol: { left: 430, right: 700, y: 540 } },
-      { x: 1100, y: 420, patrol: { left: 980, right: 1280, y: 420 } }
+      { type: "demon", x: 540, y: 540, patrol: { left: 430, right: 700, y: 540 } },
+      { type: "angel", x: 620, y: 540, patrol: { left: 430, right: 700, y: 540 } },
+      { type: "demon", x: 1100, y: 420, patrol: { left: 980, right: 1280, y: 420 } }
     ]
   },
   sanctum: {
@@ -80,6 +81,6 @@ export const ROOMS = {
       { x: 1250, y: 360, width: 250, height: 30 }
     ],
     abilityGates: [],
-    enemies: [{ x: 980, y: 470, patrol: { left: 840, right: 1180, y: 470 } }]
+    enemies: [{ type: "angel", x: 980, y: 470, patrol: { left: 840, right: 1180, y: 470 } }]
   }
 };
