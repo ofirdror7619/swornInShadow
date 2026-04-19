@@ -13,6 +13,9 @@ import bigPlatform2Url from "../assets/images/platforms/big-platform-2.png";
 import mediumPlatform1Url from "../assets/images/platforms/medium-platform-1.png";
 import mediumPlatform2Url from "../assets/images/platforms/medium-platform-2.png";
 import mediumPlatform3Url from "../assets/images/platforms/medium-platform-3.png";
+import level1MusicUrl from "../assets/audio/music/music-level-1.mp3";
+import auraSfxUrl from "../assets/audio/sounds/aura.mp3";
+import angelDeadSfxUrl from "../assets/audio/sounds/angel-dead.mp3";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -34,6 +37,9 @@ export class BootScene extends Phaser.Scene {
     this.load.image("platform-medium-1", mediumPlatform1Url);
     this.load.image("platform-medium-2", mediumPlatform2Url);
     this.load.image("platform-medium-3", mediumPlatform3Url);
+    this.load.audio("music-level-1", level1MusicUrl);
+    this.load.audio("sfx-aura", auraSfxUrl);
+    this.load.audio("sfx-angel-dead", angelDeadSfxUrl);
   }
 
   create() {

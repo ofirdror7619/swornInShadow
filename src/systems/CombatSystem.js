@@ -13,6 +13,8 @@ const PLAYER_IFRAME_MS = 680;
 const AURA_HIT_DAMAGE = 10;
 const AURA_HIT_DAMAGE_ANGEL = 1;
 const AURA_HIT_INTERVAL_MS = 160;
+const AURA_SFX_VOLUME = 0.72;
+const AURA_SFX_FADE_OUT_MS = 220;
 
 export class CombatSystem {
   constructor(scene, player, roomManager) {
@@ -24,6 +26,9 @@ export class CombatSystem {
     this.auraCooldownLeft = 0;
     this.flameOrbitTime = 0;
     this.lastAuraHitAtByEnemyId = new Map();
+    this.auraDamageMultiplier = 1;
+    this.auraSfx = scene.sound.add("sfx-aura", { volume: AURA_SFX_VOLUME, loop: false });
+    this.auraSfxFadeTween = null;
 
     this.keys = scene.input.keyboard.addKeys({
       flameSpace: "SPACE",
@@ -104,6 +109,13 @@ export class CombatSystem {
     this.setFlameVisible(true);
     this.setAuraEyesActive(true);
     this.syncAuraToPlayer();
+    this.auraSfxFadeTween?.stop();
+    this.auraSfxFadeTween = null;
+    if (this.auraSfx?.isPlaying) {
+      this.auraSfx.stop();
+    }
+    this.auraSfx?.setVolume(AURA_SFX_VOLUME);
+    this.auraSfx?.play();
     EventBus.emit("world-hint", "Flame aura unleashed");
     this.emitAuraUpdated();
   }
@@ -112,6 +124,7 @@ export class CombatSystem {
     this.auraZone.body.enable = false;
     this.setFlameVisible(false);
     this.setAuraEyesActive(false);
+    this.fadeOutAuraSfx();
     this.emitAuraUpdated();
   }
 
@@ -171,8 +184,11 @@ export class CombatSystem {
       hitDir.normalize();
     }
     const auraDamage = enemy.enemyType === "angel" ? AURA_HIT_DAMAGE_ANGEL : AURA_HIT_DAMAGE;
-    const dead = enemy.takeDamage(auraDamage, hitDir);
+    const dead = enemy.takeDamage(Math.round(auraDamage * this.auraDamageMultiplier), hitDir);
     if (dead) {
+      if (enemy.enemyType === "angel") {
+        this.scene.sound.play("sfx-angel-dead", { volume: 0.9 });
+      }
       this.scene.cameras.main.shake(80, 0.0022);
       EventBus.emit("enemy-killed");
     }
@@ -191,6 +207,7 @@ export class CombatSystem {
     const damage = enemy.contactDamage ?? 12;
     GameState.health = Math.max(0, GameState.health - damage);
     EventBus.emit("health-updated", GameState.health);
+    EventBus.emit("player-damaged", { amount: damage, health: GameState.health });
     if (enemy.enemyType === "angel") {
       EventBus.emit("world-hint", `Angel strike! Vital -${damage}`);
     } else {
@@ -207,6 +224,7 @@ export class CombatSystem {
     this.scene.cameras.main.shake(100, 0.0035);
 
     if (GameState.health <= 0) {
+      EventBus.emit("player-died", { roomId: GameState.currentRoomId });
       EventBus.emit("world-hint", "You were defeated. Respawning...");
       GameState.health = GameState.maxHealth;
       EventBus.emit("health-updated", GameState.health);
@@ -283,9 +301,19 @@ export class CombatSystem {
     });
   }
 
+  setAuraDamageMultiplier(multiplier = 1) {
+    this.auraDamageMultiplier = Phaser.Math.Clamp(multiplier, 1, 3);
+  }
+
   destroy() {
     this.setAuraEyesActive(false);
     this.lastAuraHitAtByEnemyId.clear();
+    this.auraSfxFadeTween?.stop();
+    this.auraSfxFadeTween = null;
+    if (this.auraSfx?.isPlaying) {
+      this.auraSfx.stop();
+    }
+    this.auraSfx?.destroy();
     this.auraZone?.destroy();
     this.flameSprites?.forEach((sprite) => {
       sprite.destroy();
@@ -293,6 +321,24 @@ export class CombatSystem {
     this.flameTrailEmitters?.forEach((emitter) => {
       emitter.stop();
       emitter.destroy();
+    });
+  }
+
+  fadeOutAuraSfx() {
+    if (!this.auraSfx?.isPlaying) return;
+    this.auraSfxFadeTween?.stop();
+    this.auraSfxFadeTween = this.scene.tweens.add({
+      targets: this.auraSfx,
+      volume: 0,
+      duration: AURA_SFX_FADE_OUT_MS,
+      ease: "Sine.easeOut",
+      onComplete: () => {
+        if (this.auraSfx?.isPlaying) {
+          this.auraSfx.stop();
+        }
+        this.auraSfx?.setVolume(AURA_SFX_VOLUME);
+        this.auraSfxFadeTween = null;
+      }
     });
   }
 }

@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { EventBus } from "../core/EventBus";
 import { GameState } from "../core/GameState";
+import { HungerVoice } from "../systems/HungerVoice";
 
 const HUD_Z = 2000;
 const HEALTH_ORB_X = 48;
@@ -26,6 +27,10 @@ const AURA_BAR_X = 392;
 const AURA_BAR_Y = 49;
 const AURA_BAR_W = 220;
 const AURA_BAR_H = 18;
+const CORRUPTION_BAR_X = 286;
+const CORRUPTION_BAR_Y = 14;
+const CORRUPTION_BAR_W = 388;
+const CORRUPTION_BAR_H = 12;
 
 const HUD_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
 const HUD_ACCENT_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
@@ -39,7 +44,18 @@ export class UIScene extends Phaser.Scene {
     this.healthTargetPct = 1;
     this.displayHealthPct = 1;
     this.delayedHealthPct = 1;
+    this.corruption = 0;
+    this.dominance = 0;
+    this.activeOffer = null;
+    this.whisperTimer = null;
+    this.whisperActive = false;
+    this.overlayTargetAlpha = 0;
+    this.overlayPulse = 0;
+    this.hungerVoice = null;
     this.handleGateBlocked = () => this.showHint("Path sealed by a missing ability");
+    this.handleDemonStateUpdated = (state) => this.onDemonStateUpdated(state);
+    this.handleDemonWhisper = (text) => this.showWhisper(text);
+    this.handleDemonOffer = (deal) => this.showDeal(deal);
   }
 
   create() {
@@ -48,6 +64,20 @@ export class UIScene extends Phaser.Scene {
     this.createCoinLayer();
     this.createAuraLayer();
     this.createHintLayer();
+    this.createDemonLayer();
+    this.hungerVoice = new HungerVoice({
+      onToggle: (enabled, supported, detail) => {
+        if (!supported) {
+          this.showHint("TTS unavailable in this browser");
+          return;
+        }
+        if (detail) {
+          this.showHint(detail);
+          return;
+        }
+        this.showHint(enabled ? "The Hunger voice: ON" : "The Hunger voice: OFF");
+      }
+    });
 
     EventBus.on("room-changed", this.refresh, this);
     EventBus.on("coins-updated", this.refresh, this);
@@ -55,6 +85,9 @@ export class UIScene extends Phaser.Scene {
     EventBus.on("aura-updated", this.onAuraUpdated, this);
     EventBus.on("world-hint", this.showHint, this);
     EventBus.on("gate-blocked", this.handleGateBlocked, this);
+    EventBus.on("demon-state-updated", this.handleDemonStateUpdated, this);
+    EventBus.on("demon-whisper", this.handleDemonWhisper, this);
+    EventBus.on("demon-offer", this.handleDemonOffer, this);
     this.events.on("shutdown", this.cleanup, this);
 
     this.refresh();
@@ -255,6 +288,94 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
   }
 
+  createDemonLayer() {
+    this.corruptionTrack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 6);
+    this.corruptionFill = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 7);
+    this.corruptionLabel = this.add
+      .text(CORRUPTION_BAR_X, CORRUPTION_BAR_Y - 14, "THE WHISPER", {
+        fontFamily: HUD_FONT,
+        fontSize: "10px",
+        color: "#d8a0a0"
+      })
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 7)
+      .setResolution(2);
+
+    this.whisperText = this.add
+      .text(this.scale.width * 0.5, this.scale.height - 74, "", {
+        fontFamily: "'Georgia', serif",
+        fontSize: "22px",
+        color: "#e5c9c9",
+        stroke: "#170b0b",
+        strokeThickness: 3,
+        align: "center"
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 21)
+      .setResolution(2);
+
+    this.demonOverlay = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x2a0505)
+      .setAlpha(0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z - 1);
+
+    this.dealBackdrop = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x000000)
+      .setAlpha(0.42)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 30);
+    this.dealPanel = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 560, 210, 0x140b0a)
+      .setStrokeStyle(2, 0x874a42, 0.95)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 31);
+    this.dealTitle = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 68, "", {
+        fontFamily: HUD_FONT,
+        fontSize: "22px",
+        color: "#f5c8c8"
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 32)
+      .setResolution(2);
+    this.dealDesc = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 26, "", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "17px",
+        color: "#f2d8d8",
+        align: "center"
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 32)
+      .setResolution(2);
+    this.dealActions = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 52, "[E] Accept   [R] Refuse", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "16px",
+        color: "#f0a5a5"
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 32)
+      .setResolution(2);
+
+    this.offerKeys = this.input.keyboard.addKeys({
+      accept: "E",
+      refuse: "R"
+    });
+    this.ttsToggleKey = this.input.keyboard.addKey("V");
+  }
+
   refresh() {
     this.onHealthUpdated(GameState.health);
     const formatted = new Intl.NumberFormat("en-US").format(GameState.coins);
@@ -424,6 +545,110 @@ export class UIScene extends Phaser.Scene {
     });
   }
 
+  onDemonStateUpdated(state) {
+    this.corruption = Phaser.Math.Clamp(state?.corruption ?? 0, 0, 100);
+    this.dominance = Phaser.Math.Clamp(state?.dominance ?? 0, 0, 4);
+    this.hungerVoice?.setDominance(this.dominance);
+  }
+
+  showWhisper(message) {
+    this.whisperText.setText(message);
+    this.hungerVoice?.speakWhisper(message);
+    this.tweens.killTweensOf(this.whisperText);
+    this.whisperText.setAlpha(0);
+    this.tweens.add({
+      targets: this.whisperText,
+      alpha: 1,
+      duration: 220,
+      ease: "Sine.easeOut"
+    });
+    this.whisperActive = true;
+    this.whisperTimer?.remove();
+    this.whisperTimer = this.time.delayedCall(1900, () => {
+      this.tweens.add({
+        targets: this.whisperText,
+        alpha: 0,
+        duration: 620,
+        ease: "Sine.easeOut",
+        onComplete: () => {
+          this.whisperActive = false;
+        }
+      });
+    });
+  }
+
+  showDeal(deal) {
+    if (!deal) return;
+    this.activeOffer = deal;
+    this.dealBackdrop.setVisible(true);
+    this.dealPanel.setVisible(true);
+    this.dealTitle.setVisible(true).setText(`The Whisper offers: ${deal.title}`);
+    this.dealDesc
+      .setVisible(true)
+      .setText(`${deal.description}\nCost: +${deal.corruptionCost} corruption`);
+    this.dealActions.setVisible(true);
+    this.hungerVoice?.speakOffer(deal);
+  }
+
+  resolveDeal(decision) {
+    if (!this.activeOffer) return;
+    EventBus.emit("demon-deal-response", {
+      decision,
+      dealId: this.activeOffer.id
+    });
+    this.activeOffer = null;
+    this.dealBackdrop.setVisible(false);
+    this.dealPanel.setVisible(false);
+    this.dealTitle.setVisible(false);
+    this.dealDesc.setVisible(false);
+    this.dealActions.setVisible(false);
+  }
+
+  drawCorruptionBar() {
+    const pct = this.corruption / 100;
+    const fillW = Math.max(0, (CORRUPTION_BAR_W - 4) * pct);
+    this.corruptionTrack.clear();
+    this.corruptionTrack.fillStyle(0x090304, 0.92);
+    this.corruptionTrack.fillRoundedRect(
+      CORRUPTION_BAR_X,
+      CORRUPTION_BAR_Y,
+      CORRUPTION_BAR_W,
+      CORRUPTION_BAR_H,
+      5
+    );
+    this.corruptionFill.clear();
+    const color = Phaser.Display.Color.Interpolate.ColorWithColor(
+      Phaser.Display.Color.ValueToColor(0x8b2d2d),
+      Phaser.Display.Color.ValueToColor(0xe95a3f),
+      100,
+      Math.round(pct * 100)
+    ).color;
+    this.corruptionFill.fillStyle(color, 0.96);
+    this.corruptionFill.fillRoundedRect(
+      CORRUPTION_BAR_X + 2,
+      CORRUPTION_BAR_Y + 2,
+      fillW,
+      CORRUPTION_BAR_H - 4,
+      4
+    );
+
+  }
+
+  drawDemonOverlay() {
+    this.overlayTargetAlpha = Phaser.Math.Linear(0.02, 0.2, this.corruption / 100);
+    this.overlayPulse += 0.035 + this.dominance * 0.008;
+    const flicker = this.dominance >= 3 ? Math.sin(this.overlayPulse) * 0.016 : 0;
+    const alpha = Phaser.Math.Clamp(this.overlayTargetAlpha + flicker, 0, 0.28);
+    this.demonOverlay.setAlpha(alpha);
+  }
+
+  getDominanceStageName(dominance) {
+    if (dominance >= 4) return "DOMINION";
+    if (dominance >= 3) return "POSSESSION";
+    if (dominance >= 2) return "HUNGER";
+    return "WHISPER";
+  }
+
   update(_, delta) {
     this.displayHealthPct = Phaser.Math.Linear(this.displayHealthPct, this.healthTargetPct, 0.18);
     if (this.delayedHealthPct < this.displayHealthPct) {
@@ -437,6 +662,20 @@ export class UIScene extends Phaser.Scene {
     this.drawHealthOrb(this.time.now);
     this.drawCoinOrb(this.time.now);
     this.drawAuraBar(this.time.now);
+    this.drawCorruptionBar();
+    this.drawDemonOverlay();
+
+    if (this.activeOffer) {
+      if (Phaser.Input.Keyboard.JustDown(this.offerKeys.accept)) {
+        this.resolveDeal("accept");
+      } else if (Phaser.Input.Keyboard.JustDown(this.offerKeys.refuse)) {
+        this.resolveDeal("refuse");
+      }
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.ttsToggleKey)) {
+      this.hungerVoice?.toggle();
+    }
   }
 
   cleanup() {
@@ -446,6 +685,11 @@ export class UIScene extends Phaser.Scene {
     EventBus.off("aura-updated", this.onAuraUpdated, this);
     EventBus.off("world-hint", this.showHint, this);
     EventBus.off("gate-blocked", this.handleGateBlocked, this);
+    EventBus.off("demon-state-updated", this.handleDemonStateUpdated, this);
+    EventBus.off("demon-whisper", this.handleDemonWhisper, this);
+    EventBus.off("demon-offer", this.handleDemonOffer, this);
+    this.hungerVoice?.destroy();
+    this.hungerVoice = null;
     this.healthFlame?.destroy();
     this.healthFlameMaskGraphics?.destroy();
   }

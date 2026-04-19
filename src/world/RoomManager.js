@@ -104,6 +104,7 @@ export class RoomManager {
     chest.disableBody(true, true);
     GameState.coins += CHEST_COIN_REWARD;
     EventBus.emit("coins-updated", GameState.coins);
+    EventBus.emit("chest-opened");
     EventBus.emit("world-hint", `Treasure burst! +${CHEST_COIN_REWARD} coins`);
     this.scene.cameras.main.shake(90, 0.0026);
     return true;

@@ -23,6 +23,7 @@ export class PlayerController {
     this.isDashing = false;
     this.dashTimeLeft = 0;
     this.facing = 1;
+    this.speedMultiplier = 1;
   }
 
   update(deltaMs) {
@@ -41,7 +42,7 @@ export class PlayerController {
       this.isDashing = true;
       this.dashTimeLeft = DASH_TIME_MS;
       body.velocity.y = 0;
-      body.velocity.x = DASH_VELOCITY * this.facing;
+      body.velocity.x = DASH_VELOCITY * this.facing * this.speedMultiplier;
       EventBus.emit("player-dashed");
     }
 
@@ -58,17 +59,17 @@ export class PlayerController {
     if (moveLeft === moveRight) {
       body.setVelocityX(0);
     } else if (moveLeft) {
-      body.setVelocityX(-SPEED);
+      body.setVelocityX(-SPEED * this.speedMultiplier);
     } else if (moveRight) {
-      body.setVelocityX(SPEED);
+      body.setVelocityX(SPEED * this.speedMultiplier);
     }
 
     if (moveUp === moveDown) {
       body.setVelocityY(0);
     } else if (moveUp) {
-      body.setVelocityY(-SPEED);
+      body.setVelocityY(-SPEED * this.speedMultiplier);
     } else if (moveDown) {
-      body.setVelocityY(SPEED);
+      body.setVelocityY(SPEED * this.speedMultiplier);
     }
 
     this.applyFlightCeiling();
@@ -81,5 +82,9 @@ export class PlayerController {
         this.player.body.setVelocityY(0);
       }
     }
+  }
+
+  setSpeedMultiplier(multiplier = 1) {
+    this.speedMultiplier = Math.max(0.5, multiplier);
   }
 }
