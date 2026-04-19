@@ -12,12 +12,20 @@ import { DemonAgent } from "../systems/DemonAgent";
 
 const LEVEL_MUSIC_KEY = "music-level-1";
 
+const ROOM_LABELS = {
+  start: "Start",
+  shaft: "Shaft",
+  sanctum: "Sanctum"
+};
+
 export class GameScene extends Phaser.Scene {
   constructor() {
     super("game");
     this.lastMoveAt = 0;
     this.moveBoostUntil = 0;
     this.auraBoostUntil = 0;
+    this.runCompletedAt = 0;
+    this.levelEnding = false;
   }
 
   create() {
@@ -44,6 +52,9 @@ export class GameScene extends Phaser.Scene {
         this.showHint(`Need ${gate.requiredAbility.replace("_", " ")} ability`);
       }
     });
+    this.physics.add.overlap(this.player, this.roomManager.sliceTriggers, (_, trigger) => {
+      this.roomManager.activateSliceTrigger(trigger);
+    });
 
     this.cameras.main.startFollow(this.player, true, 0.09, 0.09);
 
@@ -54,11 +65,14 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.registerDemonHooks();
+    this.registerSliceHooks();
     this.lastMoveAt = this.time.now;
     this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
+    this.emitSliceHudState();
 
     this.events.once("shutdown", () => {
       this.unregisterDemonHooks();
+      this.unregisterSliceHooks();
       this.flightFx?.destroy();
       this.combat?.destroy();
     });
@@ -90,8 +104,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   registerDemonHooks() {
-    this.handleEnemyKilled = () => {
+    this.handleEnemyKilled = (payload) => {
       this.demonAgent.onEvent("enemy_killed", this.time.now);
+      if (payload?.carriesRelic && !GameState.slice.hasRelic) {
+        this.roomManager.spawnRelicDrop(payload.x, payload.y - 96);
+        this.showHint("The Relic Angel has fallen. Claim the relic.");
+        this.emitSliceHudState(payload.roomId ?? GameState.currentRoomId);
+      }
     };
     this.handlePlayerDamaged = (payload) => {
       this.demonAgent.onEvent("player_damaged", this.time.now, payload);
@@ -108,6 +127,9 @@ export class GameScene extends Phaser.Scene {
     };
     this.handleRoomChanged = (roomId) => {
       this.demonAgent.onEvent("room_entered", this.time.now, { roomId });
+      this.emitSliceHudState(roomId);
+      const label = ROOM_LABELS[roomId] ?? roomId;
+      this.showHint(`Entered: ${label}`);
     };
     this.handleDealResponse = (payload) => {
       if (payload?.decision === "accept") {
@@ -128,6 +150,41 @@ export class GameScene extends Phaser.Scene {
     EventBus.on("demon-deal-response", this.handleDealResponse, this);
   }
 
+  registerSliceHooks() {
+    this.handleSliceRelicCollected = () => {
+      const exit = this.roomManager.spawnExitPortalRandom();
+      if (exit) {
+        const label = ROOM_LABELS[exit.roomId] ?? exit.roomId;
+        this.showHint(`A breach opens in ${label}. Find it and escape.`);
+      } else {
+        this.showHint("A breach opens. Find the exit and escape.");
+      }
+      this.emitSliceHudState();
+    };
+    this.handleSliceCheckpoint = () => {
+      this.showHint("Checkpoint active. Press on to the sanctum.");
+      this.emitSliceHudState();
+    };
+    this.handleSliceExitSpawned = (payload) => {
+      this.emitSliceHudState(payload?.roomId ?? GameState.currentRoomId);
+    };
+    this.handleSliceFinished = (payload) => {
+      this.runCompletedAt = this.time.now;
+      const escaped = payload?.triggerId === "level-exit";
+      this.showHint(escaped ? "Run complete. You escaped." : "Run complete. The ritual held.");
+      this.demonAgent.onEvent("secret_found", this.time.now);
+      this.emitSliceHudState();
+      if (escaped) {
+        this.endLevel1();
+      }
+    };
+
+    EventBus.on("slice-relic-collected", this.handleSliceRelicCollected, this);
+    EventBus.on("slice-checkpoint-activated", this.handleSliceCheckpoint, this);
+    EventBus.on("slice-exit-spawned", this.handleSliceExitSpawned, this);
+    EventBus.on("slice-finished", this.handleSliceFinished, this);
+  }
+
   unregisterDemonHooks() {
     EventBus.off("enemy-killed", this.handleEnemyKilled, this);
     EventBus.off("player-damaged", this.handlePlayerDamaged, this);
@@ -135,6 +192,13 @@ export class GameScene extends Phaser.Scene {
     EventBus.off("chest-opened", this.handleChestOpened, this);
     EventBus.off("room-changed", this.handleRoomChanged, this);
     EventBus.off("demon-deal-response", this.handleDealResponse, this);
+  }
+
+  unregisterSliceHooks() {
+    EventBus.off("slice-relic-collected", this.handleSliceRelicCollected, this);
+    EventBus.off("slice-checkpoint-activated", this.handleSliceCheckpoint, this);
+    EventBus.off("slice-exit-spawned", this.handleSliceExitSpawned, this);
+    EventBus.off("slice-finished", this.handleSliceFinished, this);
   }
 
   applyDealEffect(deal) {
@@ -168,6 +232,36 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  emitSliceHudState(roomId = GameState.currentRoomId) {
+    const slice = GameState.slice ?? {};
+    let phase = "SEEK THE RELIC";
+    let objective = "Hunt the Relic Angel in Start.";
+
+    if (slice.completed) {
+      phase = "RITUAL COMPLETE";
+      objective = "Level complete. Survive and reflect.";
+    } else if (!slice.hasRelic) {
+      phase = "SEEK THE RELIC";
+      objective = slice.relicDropped
+        ? "Claim the relic dropped in Start."
+        : "Slay the Relic Angel in Start, then claim the relic.";
+    } else {
+      phase = "FIND THE EXIT";
+      objective = slice.exitSpawned
+        ? "Find exit and escape."
+        : "A breach is forming. Hold your ground.";
+    }
+
+    EventBus.emit("slice-phase-updated", {
+      phase,
+      roomId
+    });
+    EventBus.emit("slice-objective-updated", {
+      objective,
+      roomId
+    });
+  }
+
   startLevelMusic() {
     let music = this.sound.get(LEVEL_MUSIC_KEY);
     if (!music) {
@@ -179,5 +273,17 @@ export class GameScene extends Phaser.Scene {
     if (!music.isPlaying) {
       music.play();
     }
+  }
+
+  endLevel1() {
+    if (this.levelEnding) return;
+    this.levelEnding = true;
+    this.controller?.setSpeedMultiplier(0);
+    this.player?.setVelocity(0, 0);
+    this.time.delayedCall(900, () => {
+      if (!this.scene.isActive("game")) return;
+      this.scene.stop("ui");
+      this.scene.start("menu");
+    });
   }
 }

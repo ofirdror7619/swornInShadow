@@ -8,6 +8,8 @@ import angelRightWingUrl from "../assets/images/angel/angel-right-wing.png";
 import openingLogoUrl from "../assets/images/opening/logo.png";
 import roomBackgroundUrl from "../assets/images/background/background-2.png";
 import treasureChestUrl from "../assets/images/objects/treasure-chest.png";
+import relicUrl from "../assets/images/objects/relic.png";
+import exitPortalUrl from "../assets/images/objects/exit.png";
 import bigPlatform1Url from "../assets/images/platforms/big-platform-1.png";
 import bigPlatform2Url from "../assets/images/platforms/big-platform-2.png";
 import mediumPlatform1Url from "../assets/images/platforms/medium-platform-1.png";
@@ -16,6 +18,7 @@ import mediumPlatform3Url from "../assets/images/platforms/medium-platform-3.png
 import level1MusicUrl from "../assets/audio/music/music-level-1.mp3";
 import auraSfxUrl from "../assets/audio/sounds/aura.mp3";
 import angelDeadSfxUrl from "../assets/audio/sounds/angel-dead.mp3";
+import exitAppearSfxUrl from "../assets/audio/sounds/exit.mp3";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -32,6 +35,8 @@ export class BootScene extends Phaser.Scene {
     this.load.image("opening-logo", openingLogoUrl);
     this.load.image("room-background", roomBackgroundUrl);
     this.load.image("treasure-chest", treasureChestUrl);
+    this.load.image("relic-object", relicUrl);
+    this.load.image("exit-portal", exitPortalUrl);
     this.load.image("platform-big-1", bigPlatform1Url);
     this.load.image("platform-big-2", bigPlatform2Url);
     this.load.image("platform-medium-1", mediumPlatform1Url);
@@ -40,6 +45,7 @@ export class BootScene extends Phaser.Scene {
     this.load.audio("music-level-1", level1MusicUrl);
     this.load.audio("sfx-aura", auraSfxUrl);
     this.load.audio("sfx-angel-dead", angelDeadSfxUrl);
+    this.load.audio("sfx-exit-appear", exitAppearSfxUrl);
   }
 
   create() {

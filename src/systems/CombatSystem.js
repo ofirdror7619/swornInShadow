@@ -190,7 +190,13 @@ export class CombatSystem {
         this.scene.sound.play("sfx-angel-dead", { volume: 0.9 });
       }
       this.scene.cameras.main.shake(80, 0.0022);
-      EventBus.emit("enemy-killed");
+      EventBus.emit("enemy-killed", {
+        roomId: GameState.currentRoomId,
+        enemyType: enemy.enemyType,
+        x: enemy.x,
+        y: enemy.y,
+        carriesRelic: Boolean(enemy.carriesRelic)
+      });
     }
   }
 

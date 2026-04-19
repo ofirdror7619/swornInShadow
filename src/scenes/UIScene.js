@@ -35,6 +35,12 @@ const CORRUPTION_BAR_H = 12;
 const HUD_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
 const HUD_ACCENT_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
 
+const ROOM_LABELS = {
+  start: "START",
+  shaft: "SHAFT",
+  sanctum: "SANCTUM"
+};
+
 export class UIScene extends Phaser.Scene {
   constructor() {
     super("ui");
@@ -56,6 +62,9 @@ export class UIScene extends Phaser.Scene {
     this.handleDemonStateUpdated = (state) => this.onDemonStateUpdated(state);
     this.handleDemonWhisper = (text) => this.showWhisper(text);
     this.handleDemonOffer = (deal) => this.showDeal(deal);
+    this.handleSliceObjectiveUpdated = (payload) => this.onSliceObjectiveUpdated(payload);
+    this.handleSlicePhaseUpdated = (payload) => this.onSlicePhaseUpdated(payload);
+    this.handleRoomChangedLabel = (roomId) => this.onRoomChangedLabel(roomId);
   }
 
   create() {
@@ -64,6 +73,7 @@ export class UIScene extends Phaser.Scene {
     this.createCoinLayer();
     this.createAuraLayer();
     this.createHintLayer();
+    this.createSliceLayer();
     this.createDemonLayer();
     this.hungerVoice = new HungerVoice({
       onToggle: (enabled, supported, detail) => {
@@ -80,6 +90,7 @@ export class UIScene extends Phaser.Scene {
     });
 
     EventBus.on("room-changed", this.refresh, this);
+    EventBus.on("room-changed", this.handleRoomChangedLabel, this);
     EventBus.on("coins-updated", this.refresh, this);
     EventBus.on("health-updated", this.onHealthUpdated, this);
     EventBus.on("aura-updated", this.onAuraUpdated, this);
@@ -88,6 +99,8 @@ export class UIScene extends Phaser.Scene {
     EventBus.on("demon-state-updated", this.handleDemonStateUpdated, this);
     EventBus.on("demon-whisper", this.handleDemonWhisper, this);
     EventBus.on("demon-offer", this.handleDemonOffer, this);
+    EventBus.on("slice-objective-updated", this.handleSliceObjectiveUpdated, this);
+    EventBus.on("slice-phase-updated", this.handleSlicePhaseUpdated, this);
     this.events.on("shutdown", this.cleanup, this);
 
     this.refresh();
@@ -288,6 +301,61 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
   }
 
+  createSliceLayer() {
+    this.roomNameText = this.add
+      .text(12, 12, "ROOM: START", {
+        fontFamily: HUD_FONT,
+        fontSize: "11px",
+        color: "#e8c8a0",
+        backgroundColor: "#160d0bdd",
+        padding: { x: 8, y: 4 }
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 14)
+      .setResolution(2);
+    this.roomNameText.setLetterSpacing(1.2);
+
+    this.slicePhaseText = this.add
+      .text(this.scale.width * 0.5, 82, "PHASE: SEEK THE RELIC", {
+        fontFamily: HUD_FONT,
+        fontSize: "11px",
+        color: "#f3c89a",
+        backgroundColor: "#1a0f0ddd",
+        padding: { x: 9, y: 4 }
+      })
+      .setOrigin(0.5, 0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 14)
+      .setResolution(2);
+    this.slicePhaseText.setLetterSpacing(1.4);
+
+    this.sliceObjectiveText = this.add
+      .text(this.scale.width * 0.5, 104, "Slay the Relic Angel in Start, then claim the relic.", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "14px",
+        color: "#ffe2bf",
+        stroke: "#2a1712",
+        strokeThickness: 1
+      })
+      .setOrigin(0.5, 0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 14)
+      .setResolution(2);
+
+    this.sliceDangerText = this.add
+      .text(this.scale.width - 12, 16, "DANGER: LOW", {
+        fontFamily: HUD_FONT,
+        fontSize: "11px",
+        color: "#d8b5b0"
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 8)
+      .setResolution(2);
+    this.sliceDangerText.setLetterSpacing(1.2);
+  }
+
   createDemonLayer() {
     this.corruptionTrack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 6);
     this.corruptionFill = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 7);
@@ -397,6 +465,26 @@ export class UIScene extends Phaser.Scene {
       });
     }
     this.lastCoinValue = GameState.coins;
+
+    const slice = GameState.slice ?? {};
+    if (slice.completed) {
+      this.onSlicePhaseUpdated({ phase: "RITUAL COMPLETE" });
+      this.onSliceObjectiveUpdated({ objective: "Level complete. Survive and reflect." });
+    } else if (!slice.hasRelic) {
+      this.onSlicePhaseUpdated({ phase: "SEEK THE RELIC" });
+      this.onSliceObjectiveUpdated({
+        objective: slice.relicDropped
+          ? "Claim the relic dropped in Start."
+          : "Slay the Relic Angel in Start, then claim the relic."
+      });
+    } else {
+      this.onSlicePhaseUpdated({ phase: "FIND THE EXIT" });
+      this.onSliceObjectiveUpdated({
+        objective: slice.exitSpawned
+          ? "Find exit and escape."
+          : "A breach is forming. Hold your ground."
+      });
+    }
   }
 
   onHealthUpdated(healthValue = GameState.health) {
@@ -549,6 +637,38 @@ export class UIScene extends Phaser.Scene {
     this.corruption = Phaser.Math.Clamp(state?.corruption ?? 0, 0, 100);
     this.dominance = Phaser.Math.Clamp(state?.dominance ?? 0, 0, 4);
     this.hungerVoice?.setDominance(this.dominance);
+
+    let danger = "LOW";
+    let color = "#d8b5b0";
+    if (this.dominance >= 3 || this.corruption >= 75) {
+      danger = "EXTREME";
+      color = "#ff8f7d";
+    } else if (this.dominance >= 2 || this.corruption >= 50) {
+      danger = "HIGH";
+      color = "#ffb084";
+    } else if (this.dominance >= 1 || this.corruption >= 25) {
+      danger = "ELEVATED";
+      color = "#f0bf86";
+    }
+    this.sliceDangerText?.setText(`DANGER: ${danger}`);
+    this.sliceDangerText?.setColor(color);
+  }
+
+  onSliceObjectiveUpdated(payload) {
+    const objective = payload?.objective ?? "";
+    if (!objective || !this.sliceObjectiveText) return;
+    this.sliceObjectiveText.setText(objective);
+  }
+
+  onSlicePhaseUpdated(payload) {
+    const phase = payload?.phase ?? "";
+    if (!phase || !this.slicePhaseText) return;
+    this.slicePhaseText.setText(`PHASE: ${phase}`);
+  }
+
+  onRoomChangedLabel(roomId) {
+    const label = ROOM_LABELS[roomId] ?? String(roomId ?? "UNKNOWN").toUpperCase();
+    this.roomNameText?.setText(`ROOM: ${label}`);
   }
 
   showWhisper(message) {
@@ -680,6 +800,7 @@ export class UIScene extends Phaser.Scene {
 
   cleanup() {
     EventBus.off("room-changed", this.refresh, this);
+    EventBus.off("room-changed", this.handleRoomChangedLabel, this);
     EventBus.off("coins-updated", this.refresh, this);
     EventBus.off("health-updated", this.onHealthUpdated, this);
     EventBus.off("aura-updated", this.onAuraUpdated, this);
@@ -688,6 +809,8 @@ export class UIScene extends Phaser.Scene {
     EventBus.off("demon-state-updated", this.handleDemonStateUpdated, this);
     EventBus.off("demon-whisper", this.handleDemonWhisper, this);
     EventBus.off("demon-offer", this.handleDemonOffer, this);
+    EventBus.off("slice-objective-updated", this.handleSliceObjectiveUpdated, this);
+    EventBus.off("slice-phase-updated", this.handleSlicePhaseUpdated, this);
     this.hungerVoice?.destroy();
     this.hungerVoice = null;
     this.healthFlame?.destroy();
