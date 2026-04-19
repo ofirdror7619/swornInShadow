@@ -18,6 +18,17 @@ const ROOM_LABELS = {
   sanctum: "Sanctum"
 };
 
+const WHISPER_INTRO_LINES = [
+  "You split an angel, and something split open in you.",
+  "I am the Whisper that wears your shadow when you refuse to look.",
+  "Give me your victories and your ruin, and I will make both useful.",
+  "What I grant does not leave. What I take does not return.",
+  "Walk on, vessel. We will learn each other slowly."
+];
+const WHISPER_INTRO_START_DELAY_MS = 900;
+// UI whisper queue enforces voice-end sequencing; keep emitter cadence tight.
+const WHISPER_INTRO_LINE_GAP_MS = 120;
+
 export class GameScene extends Phaser.Scene {
   constructor() {
     super("game");
@@ -41,6 +52,10 @@ export class GameScene extends Phaser.Scene {
       onOffer: (deal) => EventBus.emit("demon-offer", deal),
       onStateChanged: (state) => EventBus.emit("demon-state-updated", state)
     });
+    this.demonAgent.setNarrationLocked(!GameState.whisperIntroComplete);
+    if (GameState.whisperAwakened) {
+      this.demonAgent.awakenWhisper();
+    }
     EventBus.emit("demon-state-updated", this.demonAgent.getState());
 
     this.roomManager.buildRoom(GameState.currentRoomId, GameState.playerSpawnKey);
@@ -67,7 +82,9 @@ export class GameScene extends Phaser.Scene {
     this.registerDemonHooks();
     this.registerSliceHooks();
     this.lastMoveAt = this.time.now;
-    this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
+    if (GameState.whisperIntroComplete) {
+      this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
+    }
     this.emitSliceHudState();
 
     this.events.once("shutdown", () => {
@@ -80,8 +97,14 @@ export class GameScene extends Phaser.Scene {
 
   update(time, delta) {
     this.controller.update(delta);
+    this.physics.world.collide(this.player, this.roomManager.platforms);
+    this.physics.world.collide(this.roomManager.enemies, this.roomManager.platforms);
     this.updateDealBuffs(time);
     this.combat?.update(delta);
+    this.roomManager.enemies?.children.iterate((enemy) => {
+      enemy?.updateBehavior?.(this.player, delta);
+    });
+    this.roomManager.updateDynamicDepths();
     this.flightFx?.update(delta);
     const moving =
       Math.abs(this.player.body.velocity.x) > 20 || Math.abs(this.player.body.velocity.y) > 20;
@@ -89,9 +112,6 @@ export class GameScene extends Phaser.Scene {
       this.lastMoveAt = time;
       this.flightFx?.playMovementTrail(this.player.x, this.player.y, delta);
     }
-    this.roomManager.enemies?.children.iterate((enemy) => {
-      enemy?.updateBehavior?.(this.player, delta);
-    });
     this.roomManager.updateRoomTransitions();
     this.demonAgent.tick(time, {
       healthPct: GameState.health / Math.max(1, GameState.maxHealth),
@@ -105,14 +125,21 @@ export class GameScene extends Phaser.Scene {
 
   registerDemonHooks() {
     this.handleEnemyKilled = (payload) => {
-      this.demonAgent.onEvent("enemy_killed", this.time.now);
+      if (payload?.enemyType === "angel" && !GameState.whisperAwakened) {
+        this.startWhisperAwakeningSequence();
+      }
+      if (this.isWhisperInteractive()) {
+        this.demonAgent.onEvent("enemy_killed", this.time.now);
+      }
       if (payload?.carriesRelic && !GameState.slice.hasRelic) {
+        GameState.slice.relicAngelSlain = true;
         this.roomManager.spawnRelicDrop(payload.x, payload.y - 96);
         this.showHint("The Relic Angel has fallen. Claim the relic.");
         this.emitSliceHudState(payload.roomId ?? GameState.currentRoomId);
       }
     };
     this.handlePlayerDamaged = (payload) => {
+      if (!this.isWhisperInteractive()) return;
       this.demonAgent.onEvent("player_damaged", this.time.now, payload);
       const healthPct = GameState.health / Math.max(1, GameState.maxHealth);
       if (healthPct <= 0.3) {
@@ -120,18 +147,23 @@ export class GameScene extends Phaser.Scene {
       }
     };
     this.handlePlayerDied = () => {
+      if (!this.isWhisperInteractive()) return;
       this.demonAgent.onEvent("player_died", this.time.now);
     };
     this.handleChestOpened = () => {
+      if (!this.isWhisperInteractive()) return;
       this.demonAgent.onEvent("chest_opened", this.time.now);
     };
     this.handleRoomChanged = (roomId) => {
-      this.demonAgent.onEvent("room_entered", this.time.now, { roomId });
+      if (this.isWhisperInteractive()) {
+        this.demonAgent.onEvent("room_entered", this.time.now, { roomId });
+      }
       this.emitSliceHudState(roomId);
       const label = ROOM_LABELS[roomId] ?? roomId;
       this.showHint(`Entered: ${label}`);
     };
     this.handleDealResponse = (payload) => {
+      if (!this.isWhisperInteractive()) return;
       if (payload?.decision === "accept") {
         const deal = this.demonAgent.acceptDeal(this.time.now);
         if (deal) {
@@ -159,6 +191,9 @@ export class GameScene extends Phaser.Scene {
       } else {
         this.showHint("A breach opens. Find the exit and escape.");
       }
+      if (GameState.slice.relicAngelSlain || GameState.slice.relicDropped) {
+        this.showHint("Objectives complete. Extract.");
+      }
       this.emitSliceHudState();
     };
     this.handleSliceCheckpoint = () => {
@@ -172,7 +207,9 @@ export class GameScene extends Phaser.Scene {
       this.runCompletedAt = this.time.now;
       const escaped = payload?.triggerId === "level-exit";
       this.showHint(escaped ? "Run complete. You escaped." : "Run complete. The ritual held.");
-      this.demonAgent.onEvent("secret_found", this.time.now);
+      if (this.isWhisperInteractive()) {
+        this.demonAgent.onEvent("secret_found", this.time.now);
+      }
       this.emitSliceHudState();
       if (escaped) {
         this.endLevel1();
@@ -234,6 +271,9 @@ export class GameScene extends Phaser.Scene {
 
   emitSliceHudState(roomId = GameState.currentRoomId) {
     const slice = GameState.slice ?? {};
+    const killAngelDone = Boolean(slice.relicAngelSlain || slice.relicDropped || slice.hasRelic);
+    const findRelicDone = Boolean(slice.hasRelic);
+    const extractionReady = Boolean(killAngelDone && findRelicDone && slice.exitSpawned && !slice.completed);
     let phase = "SEEK THE RELIC";
     let objective = "Hunt the Relic Angel in Start.";
 
@@ -252,14 +292,44 @@ export class GameScene extends Phaser.Scene {
         : "A breach is forming. Hold your ground.";
     }
 
-    EventBus.emit("slice-phase-updated", {
-      phase,
-      roomId
-    });
     EventBus.emit("slice-objective-updated", {
       objective,
       roomId
     });
+    EventBus.emit("slice-objectives-updated", {
+      killAngelDone,
+      findRelicDone,
+      extractionReady,
+      roomId
+    });
+  }
+
+  startWhisperAwakeningSequence() {
+    if (GameState.whisperAwakened) return;
+    GameState.whisperAwakened = true;
+    EventBus.emit("whisper-awakened");
+    this.demonAgent.awakenWhisper(12);
+    this.demonAgent.setNarrationLocked(true);
+    let lineIndex = 0;
+    const speakNextLine = () => {
+      if (!this.scene.isActive("game")) return;
+      if (lineIndex >= WHISPER_INTRO_LINES.length) {
+        GameState.whisperIntroComplete = true;
+        this.demonAgent.setNarrationLocked(false);
+        this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
+        return;
+      }
+
+      EventBus.emit("demon-whisper", WHISPER_INTRO_LINES[lineIndex]);
+      lineIndex += 1;
+      this.time.delayedCall(WHISPER_INTRO_LINE_GAP_MS, speakNextLine);
+    };
+
+    this.time.delayedCall(WHISPER_INTRO_START_DELAY_MS, speakNextLine);
+  }
+
+  isWhisperInteractive() {
+    return Boolean(GameState.whisperAwakened && GameState.whisperIntroComplete);
   }
 
   startLevelMusic() {

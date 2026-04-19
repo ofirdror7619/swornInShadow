@@ -19,12 +19,24 @@ const RELIC_TRIGGER_H = 92;
 const RELIC_PICKUP_LOCK_MS = 700;
 const EXIT_TEXTURE_KEY = "exit-portal";
 const EXIT_APPEAR_SFX_KEY = "sfx-exit-appear";
-const EXIT_TRIGGER_W = 92;
-const EXIT_TRIGGER_H = 108;
+const EXIT_TRIGGER_W = 42;
+const EXIT_TRIGGER_H = 52;
+const EXIT_VISIBLE_BOTTOM_ORIGIN_Y = CHEST_VISIBLE_BOTTOM_ORIGIN_Y;
+const EXIT_PLATFORM_Y_OFFSET = 20;
 const EXIT_APPEAR_SFX_VOLUME = 0.9;
 const EXIT_SPAWN_FLASH_MS = 170;
 const EXIT_SPAWN_SHAKE_MS = 120;
 const EXIT_SPAWN_SHAKE_INTENSITY = 0.0018;
+const BG_LAYER_1_DEPTH = -1200;
+const BG_LAYER_2_DEPTH = -1100;
+const BG_CEILING_DEPTH = -1000;
+const BG_LAYER_1_SCROLL_FACTOR = 1;
+const BG_LAYER_2_SCROLL_FACTOR = 0.55;
+const BG_CEILING_SCROLL_FACTOR = 0.62;
+const BG_CEILING_SCALE_MULTIPLIER = 0.6;
+const WORLD_DEPTH_BASE = 300;
+const PLATFORM_DEPTH = 460;
+const RELIC_DEPTH_OFFSET = 18;
 const ENEMY_FACTORIES = {
   angel: EnemyAngel,
   demon: EnemyDemon
@@ -36,6 +48,7 @@ export class RoomManager {
     this.player = player;
     this.abilitySystem = abilitySystem;
     this.platforms = this.scene.physics.add.staticGroup();
+    this.platformVisuals = this.scene.add.group();
     this.gates = this.scene.physics.add.staticGroup();
     this.sliceTriggers = this.scene.physics.add.staticGroup();
     this.treasureChests = this.scene.physics.add.staticGroup();
@@ -43,7 +56,9 @@ export class RoomManager {
       classType: EnemyDemon,
       runChildUpdate: false
     });
-    this.background = null;
+    this.backgroundLayer1 = null;
+    this.backgroundLayer2 = null;
+    this.ceilingLayer = null;
   }
 
   buildRoom(roomId, spawnKey) {
@@ -57,25 +72,47 @@ export class RoomManager {
     this.scene.cameras.main.setBackgroundColor(0x000000);
     this.scene.physics.world.setBounds(0, 0, ROOM_DIMENSIONS.width, ROOM_DIMENSIONS.height);
     this.scene.cameras.main.setBounds(0, 0, ROOM_DIMENSIONS.width, ROOM_DIMENSIONS.height);
-    this.background = this.scene.add
-      .image(ROOM_DIMENSIONS.width * 0.5, ROOM_DIMENSIONS.height * 0.5, "room-background")
+    this.backgroundLayer1 = this.scene.add
+      .image(ROOM_DIMENSIONS.width * 0.5, ROOM_DIMENSIONS.height * 0.5, "bg-layer-1")
       .setDisplaySize(ROOM_DIMENSIONS.width, ROOM_DIMENSIONS.height)
-      .setDepth(-1000);
-    this.background.setTint(room.bgColor ?? 0xffffff);
+      .setDepth(BG_LAYER_1_DEPTH)
+      .setScrollFactor(BG_LAYER_1_SCROLL_FACTOR);
+    this.backgroundLayer2 = this.scene.add
+      .image(ROOM_DIMENSIONS.width * 0.5, ROOM_DIMENSIONS.height * 0.5, "bg-layer-2")
+      .setDisplaySize(ROOM_DIMENSIONS.width, ROOM_DIMENSIONS.height)
+      .setDepth(BG_LAYER_2_DEPTH)
+      .setScrollFactor(BG_LAYER_2_SCROLL_FACTOR);
+    this.backgroundLayer2.setTint(room.bgColor ?? 0xffffff);
+    this.ceilingLayer = this.scene.add
+      .image(ROOM_DIMENSIONS.width * 0.5, 0, "bg-ceiling-v2")
+      .setOrigin(0.5, 0)
+      .setDepth(BG_CEILING_DEPTH)
+      .setScrollFactor(BG_CEILING_SCROLL_FACTOR);
+    this.ceilingLayer.setScale(
+      (ROOM_DIMENSIONS.width / Math.max(1, this.ceilingLayer.width)) * BG_CEILING_SCALE_MULTIPLIER
+    );
 
     for (const p of room.platforms) {
       const platformKeys = p.width >= 320 ? BIG_PLATFORM_KEYS : MEDIUM_PLATFORM_KEYS;
       const textureKey = Phaser.Utils.Array.GetRandom(platformKeys);
-      const block = this.platforms.create(p.x, p.y, textureKey);
+      const visual = this.scene.add.image(p.x, p.y, textureKey);
+      visual.setDepth(PLATFORM_DEPTH);
+      this.platformVisuals.add(visual);
+
+      const block = this.platforms.create(p.x, p.y, "gate");
+      block.displayWidth = p.width;
+      block.displayHeight = p.height;
+      block.setVisible(false);
+      block.setAlpha(0.001);
       block.refreshBody();
     }
 
-    const platformBlocks = this.platforms.getChildren();
-    if (platformBlocks.length > 0) {
-      const chosen = Phaser.Utils.Array.GetRandom(platformBlocks);
-      const spreadX = Math.max(16, chosen.displayWidth * 0.28);
+    const platformDefs = room.platforms ?? [];
+    if (platformDefs.length > 0) {
+      const chosen = Phaser.Utils.Array.GetRandom(platformDefs);
+      const spreadX = Math.max(16, chosen.width * 0.28);
       const chestX = chosen.x + Phaser.Math.Between(Math.round(-spreadX), Math.round(spreadX));
-      const platformTop = chosen.y - chosen.displayHeight * 0.5;
+      const platformTop = chosen.y - chosen.height * 0.5;
       const chest = this.treasureChests.create(chestX, platformTop + 20, "treasure-chest");
       chest.setOrigin(0.5, CHEST_VISIBLE_BOTTOM_ORIGIN_Y);
       chest.setDepth(650);
@@ -156,13 +193,69 @@ export class RoomManager {
   }
 
   clearRoom() {
-    this.background?.destroy();
-    this.background = null;
+    this.backgroundLayer1?.destroy();
+    this.backgroundLayer2?.destroy();
+    this.ceilingLayer?.destroy();
+    this.backgroundLayer1 = null;
+    this.backgroundLayer2 = null;
+    this.ceilingLayer = null;
+    this.platformVisuals?.clear(true, true);
     this.platforms?.clear(true, true);
     this.gates?.clear(true, true);
     this.sliceTriggers?.clear(true, true);
     this.treasureChests?.clear(true, true);
     this.enemies?.clear(true, true);
+  }
+
+  depthForY(y, offset = 0) {
+    return WORLD_DEPTH_BASE + y + offset;
+  }
+
+  updateDynamicDepths() {
+    const playerDepth = this.player?.active ? this.depthForY(this.player.y) : WORLD_DEPTH_BASE;
+    let frontEntityDepth = playerDepth;
+
+    this.enemies?.children.iterate((enemy) => {
+      if (!enemy?.active) return;
+      const enemyDepth = this.depthForY(enemy.y);
+      frontEntityDepth = Math.max(frontEntityDepth, enemyDepth);
+    });
+
+    this.sliceTriggers?.children.iterate((trigger) => {
+      if (!trigger?.active) return;
+      if (trigger.sliceTriggerKind === "relic") {
+        trigger.setDepth(this.depthForY(trigger.y, RELIC_DEPTH_OFFSET));
+        return;
+      }
+      if (trigger.sliceTriggerKind === "exit") {
+        trigger.setDepth(frontEntityDepth - 6);
+      }
+    });
+
+    this.treasureChests?.children.iterate((chest) => {
+      if (!chest?.active) return;
+      chest.setDepth(this.depthForY(chest.y));
+    });
+
+    if (this.player?.active) {
+      this.player.setDepth(playerDepth - 1);
+      this.player.visual?.setDepth(playerDepth);
+    }
+
+    this.enemies?.children.iterate((enemy) => {
+      if (!enemy?.active) return;
+      const enemyDepth = this.depthForY(enemy.y);
+      enemy.setDepth(enemyDepth - 1);
+      if (enemy.visual?.active) {
+        enemy.visual.setDepth(enemyDepth);
+      }
+      if (enemy.vitalBar?.active) {
+        enemy.vitalBar.setDepth(enemyDepth + 2);
+      }
+      if (enemy.blueTrailEmitter?.active) {
+        enemy.blueTrailEmitter.setDepth(enemyDepth - 3);
+      }
+    });
   }
 
   shouldSpawnSliceTrigger(kind) {
@@ -200,6 +293,7 @@ export class RoomManager {
     });
     trigger.refreshBody();
     GameState.slice.relicDropped = true;
+    GameState.slice.relicAngelSlain = true;
     GameState.slice.relicDropRoomId = GameState.currentRoomId;
     GameState.slice.relicDropX = x;
     GameState.slice.relicDropY = y;
@@ -221,6 +315,7 @@ export class RoomManager {
     trigger.sliceTriggerKind = "exit";
     trigger.setDepth(760);
     trigger.setAlpha(0.98);
+    trigger.setOrigin(0.5, EXIT_VISIBLE_BOTTOM_ORIGIN_Y);
     trigger.setDisplaySize(EXIT_TRIGGER_W, EXIT_TRIGGER_H);
     trigger.refreshBody();
     return trigger;
@@ -238,7 +333,8 @@ export class RoomManager {
       70,
       ROOM_DIMENSIONS.width - 70
     );
-    const y = Math.max(110, chosen.y - 86);
+    const platformTop = chosen.y - chosen.height * 0.5;
+    const y = Math.max(110, platformTop + EXIT_PLATFORM_Y_OFFSET);
 
     GameState.slice.exitSpawned = true;
     GameState.slice.exitRoomId = roomId;
@@ -318,6 +414,21 @@ export class RoomManager {
     return blocked;
   }
 
+  getRespawnTarget() {
+    const checkpointRoomId = GameState.slice.checkpointRoomId;
+    const checkpointSpawnKey = GameState.slice.checkpointSpawnKey;
+    if (GameState.slice.checkpointActivated && checkpointRoomId && checkpointSpawnKey) {
+      return {
+        roomId: checkpointRoomId,
+        spawnKey: checkpointSpawnKey
+      };
+    }
+    return {
+      roomId: "start",
+      spawnKey: "spawn_center"
+    };
+  }
+
   activateSliceTrigger(trigger) {
     if (!trigger?.active) return null;
     const now = this.scene.time.now;
@@ -340,9 +451,11 @@ export class RoomManager {
     if (trigger.sliceTriggerKind === "checkpoint") {
       if (GameState.slice.checkpointActivated) return null;
       GameState.slice.checkpointActivated = true;
+      GameState.slice.checkpointRoomId = GameState.currentRoomId;
       if (trigger.checkpointSpawn) {
         GameState.playerSpawnKey = trigger.checkpointSpawn;
       }
+      GameState.slice.checkpointSpawnKey = GameState.playerSpawnKey;
       trigger.disableBody(true, true);
       EventBus.emit("slice-checkpoint-activated", {
         roomId: GameState.currentRoomId,

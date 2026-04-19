@@ -1,6 +1,10 @@
 import Phaser from "phaser";
 import { EventBus } from "../core/EventBus";
 
+const TRAIL_DEPTH_OFFSET = 12;
+const TRAIL_GHOST_OFFSET = 11;
+const TRAIL_COMET_OFFSET = 10;
+
 export class FlightFxController {
   constructor(scene, player) {
     this.scene = scene;
@@ -32,7 +36,7 @@ export class FlightFxController {
       alpha: { start: 0.2, end: 0 },
       tint: 0x1a1222
     });
-    this.smokeEmitter.setDepth(this.fxDepthBase - 3);
+    this.smokeEmitter.setDepth(this.fxDepthBase - TRAIL_DEPTH_OFFSET);
 
     // Idle/Hover: ember particles עדינים (אדומים) שעולים למעלה.
     this.emberEmitter = this.scene.add.particles(0, 0, "fx-ember", {
@@ -48,7 +52,7 @@ export class FlightFxController {
       blendMode: "ADD",
       tint: 0xff432f
     });
-    this.emberEmitter.setDepth(this.fxDepthBase - 1);
+    this.emberEmitter.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 1));
 
     // Persistent infernal envelope: subtle flame dust hugging the demon.
     this.infernoEmitter = this.scene.add.particles(0, 0, "fx-ember", {
@@ -67,7 +71,7 @@ export class FlightFxController {
       },
       emitting: false
     });
-    this.infernoEmitter.setDepth(this.fxDepthBase - 2);
+    this.infernoEmitter.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 2));
 
     // Motion trail: golden sparks when moving, tuned by speed.
     this.goldTrailEmitter = this.scene.add.particles(0, 0, "fx-gold", {
@@ -83,7 +87,7 @@ export class FlightFxController {
       tint: [0xffb84d, 0xffd88a, 0xfff0be],
       emitting: false
     });
-    this.goldTrailEmitter.setDepth(this.fxDepthBase - 2);
+    this.goldTrailEmitter.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 2));
 
     // Idle/Hover: eye flicker עדין - אם יש שכבת eyes בדמות, נשתמש בה.
     this.usesPlayerEyes = Boolean(this.player.eyes);
@@ -104,11 +108,12 @@ export class FlightFxController {
       blendMode: "ADD",
       emitting: false
     });
-    this.redEmitter.setDepth(this.fxDepthBase - 1);
+    this.redEmitter.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 1));
   }
 
   update(deltaMs) {
     if (this.isDestroyed) return;
+    this.syncFxDepthToPlayer();
     this.updateInfernalEnvelope(deltaMs);
     this.updateGoldTrail(deltaMs);
     this.updateEyeFlicker(deltaMs);
@@ -186,8 +191,9 @@ export class FlightFxController {
   }
 
   spawnTrailGhost(x = this.player.x, y = this.player.y) {
+    this.syncFxDepthToPlayer();
     const ghost = this.scene.add.image(x, y, "demon-body");
-    ghost.setDepth(this.fxDepthBase - 3);
+    ghost.setDepth(this.fxDepthBase - TRAIL_GHOST_OFFSET);
     ghost.setScale(this.player.scale * 0.98);
     ghost.setFlipX(this.player.flipX);
     ghost.setAngle(this.player.angle);
@@ -196,7 +202,7 @@ export class FlightFxController {
     ghost.setBlendMode("ADD");
 
     const emberCore = this.scene.add.image(x, y, "demon-body");
-    emberCore.setDepth(this.fxDepthBase - 2);
+    emberCore.setDepth(this.fxDepthBase - (TRAIL_GHOST_OFFSET - 1));
     emberCore.setScale(this.player.scale * 0.82);
     emberCore.setFlipX(this.player.flipX);
     emberCore.setAngle(this.player.angle);
@@ -223,7 +229,7 @@ export class FlightFxController {
     });
 
     const goldPulse = this.scene.add.image(x, y, "fx-gold");
-    goldPulse.setDepth(this.fxDepthBase - 1);
+    goldPulse.setDepth(this.fxDepthBase - TRAIL_COMET_OFFSET);
     goldPulse.setScale(0.95);
     goldPulse.setAlpha(0.32);
     goldPulse.setBlendMode("ADD");
@@ -239,14 +245,16 @@ export class FlightFxController {
 
   onDash() {
     if (this.isDestroyed) return;
+    this.syncFxDepthToPlayer();
     this.redEmitter.emitParticleAt(this.player.x, this.player.y, 18);
     this.scene.cameras.main.shake(90, 0.0025, true);
     this.scene.cameras.main.flash(70, 110, 18, 18, false);
   }
 
   spawnGoldComet(x, y, vx, vy) {
+    this.syncFxDepthToPlayer();
     const comet = this.scene.add.image(x, y, "fx-gold");
-    comet.setDepth(this.fxDepthBase - 1);
+    comet.setDepth(this.fxDepthBase - TRAIL_COMET_OFFSET);
     comet.setScale(2.2);
     comet.setAlpha(0.55);
     comet.setBlendMode("ADD");
@@ -269,6 +277,7 @@ export class FlightFxController {
   }
 
   spawnIgniteBurst() {
+    this.syncFxDepthToPlayer();
     this.redEmitter.emitParticleAt(this.player.x, this.player.y, 14);
     const burst = this.scene.add.particles(this.player.x, this.player.y, "fx-gold", {
       lifespan: { min: 200, max: 360 },
@@ -280,7 +289,7 @@ export class FlightFxController {
       blendMode: "ADD",
       tint: [0xffc26f, 0xffefb7]
     });
-    burst.setDepth(this.fxDepthBase - 1);
+    burst.setDepth(this.fxDepthBase - TRAIL_COMET_OFFSET);
     this.scene.time.delayedCall(380, () => {
       burst.destroy();
     });
@@ -300,5 +309,20 @@ export class FlightFxController {
     this.infernoEmitter?.destroy();
     this.goldTrailEmitter?.destroy();
     this.redEmitter?.destroy();
+  }
+
+  syncFxDepthToPlayer() {
+    const currentBase = this.player.visual?.depth ?? this.player.depth ?? this.fxDepthBase;
+    if (!Number.isFinite(currentBase)) return;
+    this.fxDepthBase = currentBase;
+    this.smokeEmitter?.setDepth(this.fxDepthBase - TRAIL_DEPTH_OFFSET);
+    this.emberEmitter?.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 1));
+    this.infernoEmitter?.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 2));
+    this.goldTrailEmitter?.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 2));
+    this.redEmitter?.setDepth(this.fxDepthBase - (TRAIL_DEPTH_OFFSET - 1));
+    if (!this.usesPlayerEyes) {
+      this.leftEye?.setDepth(this.fxDepthBase + 1);
+      this.rightEye?.setDepth(this.fxDepthBase + 1);
+    }
   }
 }

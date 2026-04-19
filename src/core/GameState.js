@@ -11,10 +11,13 @@ class GameStateStore {
     this.maxHealth = 100;
     this.health = 100;
     this.coins = 0;
+    this.whisperAwakened = false;
+    this.whisperIntroComplete = false;
     this.collected = new Set();
     this.unlockedAbilities = new Set([ABILITY_IDS.DASH]);
     this.slice = {
       hasRelic: false,
+      relicAngelSlain: false,
       relicDropped: false,
       relicDropRoomId: null,
       relicDropX: 0,
@@ -24,6 +27,8 @@ class GameStateStore {
       exitX: 0,
       exitY: 0,
       checkpointActivated: false,
+      checkpointRoomId: null,
+      checkpointSpawnKey: null,
       completed: false
     };
   }

@@ -86,6 +86,7 @@ export class DemonAgent {
     this.killTimestamps = [];
     this.pendingOffer = null;
     this.lowHealthOfferTriggered = false;
+    this.narrationLocked = false;
   }
 
   getState() {
@@ -99,6 +100,9 @@ export class DemonAgent {
   }
 
   tick(now, behavior) {
+    if (this.narrationLocked) {
+      return;
+    }
     this.trimKillHistory(now);
     this.state.killsInLastMinute = this.killTimestamps.length;
     this.state.timeSinceLastKill = Number.isFinite(this.lastKillAt) ? now - this.lastKillAt : Infinity;
@@ -143,6 +147,7 @@ export class DemonAgent {
   }
 
   offerDeal(reason, now) {
+    if (this.narrationLocked) return;
     if (this.pendingOffer) return;
     if (now - this.lastOfferAt < OFFER_COOLDOWN_MS) return;
 
@@ -210,6 +215,9 @@ export class DemonAgent {
   }
 
   maybeWhisper(event, now, opts = {}) {
+    if (this.narrationLocked) {
+      return;
+    }
     if (!opts.force && now - this.lastWhisperAt < this.getWhisperCooldownMs()) {
       return;
     }
@@ -265,5 +273,15 @@ export class DemonAgent {
 
   emitState() {
     this.onStateChanged?.(this.getState());
+  }
+
+  setNarrationLocked(locked) {
+    this.narrationLocked = Boolean(locked);
+  }
+
+  awakenWhisper(initialCorruption = 12) {
+    this.state.corruption = Math.max(this.state.corruption, initialCorruption);
+    this.state.dominance = Math.floor(this.state.corruption / DOMINANCE_STEP);
+    this.emitState();
   }
 }

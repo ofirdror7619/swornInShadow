@@ -230,11 +230,17 @@ export class CombatSystem {
     this.scene.cameras.main.shake(100, 0.0035);
 
     if (GameState.health <= 0) {
+      const respawnTarget = this.roomManager.getRespawnTarget();
       EventBus.emit("player-died", { roomId: GameState.currentRoomId });
-      EventBus.emit("world-hint", "You were defeated. Respawning...");
+      EventBus.emit(
+        "world-hint",
+        GameState.slice.checkpointActivated
+          ? "You were defeated. Returning to checkpoint..."
+          : "You were defeated. Returning to Start..."
+      );
       GameState.health = GameState.maxHealth;
       EventBus.emit("health-updated", GameState.health);
-      this.roomManager.buildRoom(GameState.currentRoomId, GameState.playerSpawnKey);
+      this.roomManager.buildRoom(respawnTarget.roomId, respawnTarget.spawnKey);
       this.playerIFrameLeft = PLAYER_IFRAME_MS;
       this.deactivateFlameAura();
     }
