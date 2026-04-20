@@ -6,6 +6,7 @@ const BASE_WHISPER_COOLDOWN_MS = 5200;
 const MIN_WHISPER_COOLDOWN_MS = 1800;
 const IDLE_THRESHOLD_MS = 15000;
 const OFFER_COOLDOWN_MS = 24000;
+const CHOICE_COOLDOWN_MS = 17000;
 const LOW_HEALTH_THRESHOLD = 0.25;
 const KILL_STREAK_WINDOW_MS = 5000;
 const KILL_STREAK_TARGET = 3;
@@ -57,11 +58,71 @@ const DOMINANCE_LINES = [
   ["I am already inside.", "You can feel me, can't you?"],
   ["Now we are one.", "There is no way back."]
 ];
+const CHOICES = {
+  gate_blocked: {
+    id: "gate_blocked",
+    title: "The Gate Hungers",
+    prompt: "A sealed path. Feed the Whisper, or endure and carve your own route.",
+    left: {
+      id: "embrace",
+      label: "Embrace",
+      description: "Break through with demonic force. +14 corruption, instant power.",
+      corruptionDelta: 14,
+      effect: "embrace_gate"
+    },
+    right: {
+      id: "resist",
+      label: "Resist",
+      description: "Stay pure. -6 corruption, but enemies answer the refusal.",
+      corruptionDelta: -6,
+      effect: "resist_gate"
+    }
+  },
+  low_health: {
+    id: "low_health_choice",
+    title: "Blood Covenant",
+    prompt: "Your pulse is fading. Let the Whisper hold the wound?",
+    left: {
+      id: "embrace",
+      label: "Accept Blood",
+      description: "Restore 28 vital and boost aura. +12 corruption.",
+      corruptionDelta: 12,
+      effect: "embrace_low_health"
+    },
+    right: {
+      id: "resist",
+      label: "Clench Teeth",
+      description: "No heal, but corruption recedes. -5 corruption.",
+      corruptionDelta: -5,
+      effect: "resist_low_health"
+    }
+  },
+  kill_streak: {
+    id: "kill_streak_choice",
+    title: "Feast Or Flee",
+    prompt: "The slaughter sings. Push deeper, or silence the voice?",
+    left: {
+      id: "embrace",
+      label: "Feast",
+      description: "Spawn a brutal wave, gain frenzy buffs. +10 corruption.",
+      corruptionDelta: 10,
+      effect: "embrace_streak"
+    },
+    right: {
+      id: "resist",
+      label: "Silence",
+      description: "Gain brief protection and reduce corruption by 4.",
+      corruptionDelta: -4,
+      effect: "resist_streak"
+    }
+  }
+};
 
 export class DemonAgent {
-  constructor({ onWhisper, onOffer, onStateChanged, initialState }) {
+  constructor({ onWhisper, onOffer, onChoice, onStateChanged, initialState }) {
     this.onWhisper = onWhisper;
     this.onOffer = onOffer;
+    this.onChoice = onChoice;
     this.onStateChanged = onStateChanged;
 
     this.state = {
@@ -83,8 +144,10 @@ export class DemonAgent {
     this.lastKillAt = -Infinity;
     this.lastOfferAt = -Infinity;
     this.lastIdleNoticeAt = -Infinity;
+    this.lastChoiceAt = -Infinity;
     this.killTimestamps = [];
     this.pendingOffer = null;
+    this.pendingChoice = null;
     this.lowHealthOfferTriggered = false;
     this.narrationLocked = false;
   }
@@ -146,6 +209,23 @@ export class DemonAgent {
     this.emitState();
   }
 
+  resolveChoice(decision, now) {
+    if (!this.pendingChoice) return null;
+    const active = this.pendingChoice;
+    this.pendingChoice = null;
+    const option = decision === "right" ? active.right : active.left;
+    if (!option) return null;
+    this.addCorruption(option.corruptionDelta ?? 0);
+    this.lastChoiceAt = now;
+    this.maybeWhisper("offer_power", now, { force: true });
+    this.emitState();
+    return {
+      choiceId: active.id,
+      decision,
+      option
+    };
+  }
+
   offerDeal(reason, now) {
     if (this.narrationLocked) return;
     if (this.pendingOffer) return;
@@ -161,6 +241,23 @@ export class DemonAgent {
     this.pendingOffer = deal;
     this.lastOfferAt = now;
     this.onOffer?.(deal);
+    this.maybeWhisper("offer_power", now, { force: true });
+  }
+
+  maybeOfferChoice(reason, now) {
+    if (this.narrationLocked) return;
+    if (this.pendingChoice || this.pendingOffer) return;
+    if (now - this.lastChoiceAt < CHOICE_COOLDOWN_MS) return;
+    const template = CHOICES[reason];
+    if (!template) return;
+    const choice = {
+      ...template,
+      left: { ...template.left },
+      right: { ...template.right }
+    };
+    this.pendingChoice = choice;
+    this.lastChoiceAt = now;
+    this.onChoice?.(choice);
     this.maybeWhisper("offer_power", now, { force: true });
   }
 
@@ -183,8 +280,12 @@ export class DemonAgent {
         } else {
           this.addCorruption(2);
         }
+        if (!payload?.internal || this.state.dominance >= 1) {
+          this.maybeOfferChoice("kill_streak", now);
+        }
         break;
       case "low_health":
+        this.maybeOfferChoice("low_health", now);
         break;
       case "player_damaged":
         this.state.damageTakenRecently += payload?.amount ?? 0;
@@ -203,6 +304,9 @@ export class DemonAgent {
         break;
       case "chest_opened":
         this.addCorruption(1);
+        break;
+      case "gate_blocked":
+        this.maybeOfferChoice("gate_blocked", now);
         break;
       default:
         break;

@@ -10,6 +10,13 @@ const WINDUP_MS = 240;
 const LUNGE_MS = 260;
 const RECOVER_MS = 240;
 const LUNGE_SPEED = 360;
+const DIVE_MIN_RANGE = 140;
+const DIVE_MAX_RANGE = 340;
+const DIVE_WINDUP_MS = 420;
+const DIVE_LUNGE_MS = 330;
+const DIVE_RECOVER_MS = 420;
+const DIVE_SPEED = 510;
+const DIVE_COOLDOWN_MS = 2900;
 const MAX_HEALTH = 120;
 const RENDER_DEPTH = 520;
 const FLAP_DURATION_MS = 900;
@@ -25,7 +32,7 @@ const PHYSICS_OFFSET_X = 91;
 const PHYSICS_OFFSET_Y = 65;
 
 export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y, patrol) {
+  constructor(scene, x, y, patrol, _options = {}) {
     super(scene, x, y, "angel-body");
     scene.add.existing(this);
     scene.physics.add.existing(this);
@@ -56,6 +63,9 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     this.bobOffset = Phaser.Math.FloatBetween(0, Math.PI * 2);
     this.trailEmitterTickMs = 0;
     this.ghostTrailTickMs = 0;
+    this.diveCooldownLeft = Phaser.Math.Between(900, 1800);
+    this.telegraphGraphics = scene.add.graphics();
+    this.telegraphGraphics.setDepth(RENDER_DEPTH + 2);
 
     this.visual = scene.add.container(this.x, this.y);
     this.visual.setDepth(RENDER_DEPTH + 1);
@@ -92,6 +102,7 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
       this.visual?.destroy();
       this.vitalBar?.destroy();
       this.blueTrailEmitter?.destroy();
+      this.telegraphGraphics?.destroy();
     });
   }
 
@@ -120,9 +131,13 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     if (this.isDead) return;
 
     this.attackCooldownLeft = Math.max(0, this.attackCooldownLeft - delta);
+    this.diveCooldownLeft = Math.max(0, this.diveCooldownLeft - delta);
     this.syncVisual(time);
     this.drawVitalBar();
     this.spawnMovementTrail(delta);
+    if (this.state !== "dive_windup") {
+      this.telegraphGraphics.clear();
+    }
   }
 
   syncVisual(time) {
@@ -262,6 +277,15 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
         return;
       }
 
+      if (this.shouldDive(distance)) {
+        this.state = "dive_windup";
+        this.stateTimeLeft = DIVE_WINDUP_MS;
+        this.body.setVelocity(0, 0);
+        this.attackVector = this.predictDiveVector(player);
+        this.setVisualTint(0x9fd8ff);
+        return;
+      }
+
       if (distance > CHASE_RADIUS * 1.25) {
         this.state = "patrol";
       }
@@ -290,6 +314,34 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
       return;
     }
 
+    if (this.state === "dive_windup") {
+      this.stateTimeLeft -= deltaMs;
+      this.body.setVelocity(0, 0);
+      this.attackVector = this.predictDiveVector(player);
+      const windupPct = Phaser.Math.Clamp(1 - this.stateTimeLeft / DIVE_WINDUP_MS, 0, 1);
+      this.drawAttackTelegraph(this.attackVector, windupPct);
+      if (this.stateTimeLeft <= 0) {
+        this.clearVisualTint();
+        this.telegraphGraphics.clear();
+        this.state = "dive_lunge";
+        this.stateTimeLeft = DIVE_LUNGE_MS;
+        this.body.setVelocity(this.attackVector.x * DIVE_SPEED, this.attackVector.y * DIVE_SPEED);
+        this.attackCooldownLeft = ATTACK_COOLDOWN_MS;
+        this.diveCooldownLeft = DIVE_COOLDOWN_MS;
+      }
+      return;
+    }
+
+    if (this.state === "dive_lunge") {
+      this.stateTimeLeft -= deltaMs;
+      if (this.stateTimeLeft <= 0) {
+        this.state = "recover";
+        this.stateTimeLeft = DIVE_RECOVER_MS;
+        this.body.setVelocity(0, 0);
+      }
+      return;
+    }
+
     if (this.state === "recover") {
       this.stateTimeLeft -= deltaMs;
       this.body.setVelocity(0, 0);
@@ -310,7 +362,7 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
   }
 
   canDamagePlayer() {
-    return !this.isDead && this.state === "lunge";
+    return !this.isDead && (this.state === "lunge" || this.state === "dive_lunge");
   }
 
   takeDamage(amount, hitDir) {
@@ -336,7 +388,8 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
       return true;
     }
 
-    if (this.state === "windup" || this.state === "lunge") {
+    if (this.state === "windup" || this.state === "lunge" || this.state === "dive_windup" || this.state === "dive_lunge") {
+      this.telegraphGraphics.clear();
       this.state = "recover";
       this.stateTimeLeft = RECOVER_MS;
       this.attackCooldownLeft = ATTACK_COOLDOWN_MS;
@@ -355,5 +408,35 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     this.leftWing.clearTint();
     this.rightWing.clearTint();
     this.bodySprite.clearTint();
+  }
+
+  shouldDive(distance) {
+    if (this.diveCooldownLeft > 0) return false;
+    return distance >= DIVE_MIN_RANGE && distance <= DIVE_MAX_RANGE;
+  }
+
+  predictDiveVector(player) {
+    const px = player.x + (player.body?.velocity.x ?? 0) * 0.2;
+    const py = player.y + (player.body?.velocity.y ?? 0) * 0.2;
+    const toPredicted = new Phaser.Math.Vector2(px - this.x, py - this.y);
+    if (toPredicted.lengthSq() < 0.0001) {
+      return new Phaser.Math.Vector2(this.patrolDir, 0);
+    }
+    return toPredicted.normalize();
+  }
+
+  drawAttackTelegraph(vector, pct) {
+    if (!this.telegraphGraphics?.active) return;
+    const dist = Phaser.Math.Linear(50, 240, pct);
+    const toX = this.x + vector.x * dist;
+    const toY = this.y + vector.y * dist;
+    this.telegraphGraphics.clear();
+    this.telegraphGraphics.lineStyle(2 + pct, 0xbce7ff, 0.5 + pct * 0.4);
+    this.telegraphGraphics.beginPath();
+    this.telegraphGraphics.moveTo(this.x, this.y);
+    this.telegraphGraphics.lineTo(toX, toY);
+    this.telegraphGraphics.strokePath();
+    this.telegraphGraphics.lineStyle(1.5, 0xe8f7ff, 0.45 + pct * 0.3);
+    this.telegraphGraphics.strokeCircle(toX, toY, 8 + pct * 9);
   }
 }

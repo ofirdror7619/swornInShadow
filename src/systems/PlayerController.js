@@ -40,6 +40,7 @@ export class PlayerController {
 
     if (dashPressed && this.abilitySystem.canDash() && !this.isDashing) {
       this.isDashing = true;
+      this.player.isDashing = true;
       this.dashTimeLeft = DASH_TIME_MS;
       body.velocity.y = 0;
       body.velocity.x = DASH_VELOCITY * this.facing * this.speedMultiplier;
@@ -52,9 +53,11 @@ export class PlayerController {
       this.applyFlightCeiling();
       if (this.dashTimeLeft <= 0) {
         this.isDashing = false;
+        this.player.isDashing = false;
       }
       return;
     }
+    this.player.isDashing = false;
 
     if (moveLeft === moveRight) {
       body.setVelocityX(0);

@@ -130,6 +130,7 @@ export class CombatSystem {
 
   setAuraEyesActive(active) {
     if (!this.player?.eyes) return;
+    this.player?.setAuraActive?.(active);
     if (active) {
       this.player.eyes.setTint(0xff2424);
       return;
@@ -195,7 +196,10 @@ export class CombatSystem {
         enemyType: enemy.enemyType,
         x: enemy.x,
         y: enemy.y,
-        carriesRelic: Boolean(enemy.carriesRelic)
+        carriesRelic: Boolean(enemy.carriesRelic),
+        isRoomEnemy: Boolean(enemy.isRoomEnemy),
+        spawnRoomId: enemy.spawnRoomId ?? GameState.currentRoomId,
+        spawnEnemyId: enemy.spawnEnemyId ?? null
       });
     }
   }
@@ -315,6 +319,13 @@ export class CombatSystem {
 
   setAuraDamageMultiplier(multiplier = 1) {
     this.auraDamageMultiplier = Phaser.Math.Clamp(multiplier, 1, 3);
+  }
+
+  grantAuraCharge(chargeDelta = 0) {
+    if (this.auraActiveLeft > 0) return;
+    const deltaMs = Math.round(FLAME_AURA_COOLDOWN_MS * Phaser.Math.Clamp(chargeDelta, 0, 1));
+    this.auraCooldownLeft = Math.max(0, this.auraCooldownLeft - deltaMs);
+    this.emitAuraUpdated();
   }
 
   destroy() {

@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { EventBus } from "../core/EventBus";
 import { GameState } from "../core/GameState";
 import { HungerVoice } from "../systems/HungerVoice";
+import { ABILITY_IDS } from "../data/abilities";
 
 const HUD_Z = 2000;
 const HEALTH_ORB_X = 48;
@@ -36,11 +37,16 @@ const HUD_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
 const HUD_ACCENT_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
 const WHISPER_SENTENCE_BREAK_MS = 1000;
 const WHISPER_FADE_OUT_MS = 220;
+const MAP_X = 12;
+const MAP_Y = 34;
+const MAP_ROOM_W = 18;
+const MAP_ROOM_H = 14;
+const MAP_ROOM_GAP = 13;
 
 const ROOM_LABELS = {
-  start: "START",
-  shaft: "SHAFT",
-  sanctum: "SANCTUM"
+  start: "A",
+  shaft: "B",
+  crypt: "C"
 };
 
 export class UIScene extends Phaser.Scene {
@@ -55,13 +61,17 @@ export class UIScene extends Phaser.Scene {
     this.corruption = 0;
     this.dominance = 0;
     this.activeOffer = null;
+    this.activeChoice = null;
     this.whisperTimer = null;
     this.whisperActive = false;
     this.whisperQueue = [];
     this.overlayTargetAlpha = 0;
     this.overlayPulse = 0;
     this.hungerVoice = null;
-    this.handleGateBlocked = () => this.showHint("Path sealed by a missing ability");
+    this.handleGateBlocked = (payload) => {
+      const ability = this.formatAbilityLabel(payload?.requiredAbility);
+      this.showHint(`Path sealed. Need ${ability}.`);
+    };
     this.handleDemonStateUpdated = (state) => this.onDemonStateUpdated(state);
     this.handleDemonWhisper = (text) => this.showWhisper(text);
     this.handleDemonOffer = (deal) => this.showDeal(deal);
@@ -69,6 +79,13 @@ export class UIScene extends Phaser.Scene {
     this.handleSliceObjectivesUpdated = (payload) => this.onSliceObjectivesUpdated(payload);
     this.handleWhisperAwakened = () => this.onWhisperAwakened();
     this.handleRoomChangedLabel = (roomId) => this.onRoomChangedLabel(roomId);
+    this.handleGameplayLoopUpdated = (payload) => this.onGameplayLoopUpdated(payload);
+    this.handleAbilityUnlocked = (ability) => this.onAbilityUnlocked(ability);
+    this.handleWhisperChoice = (choice) => this.showWhisperChoice(choice);
+    this.killCombo = 0;
+    this.threatTier = 1;
+    this.nextAmbushMs = 0;
+    this.enemiesDefeated = 0;
   }
 
   create() {
@@ -94,6 +111,9 @@ export class UIScene extends Phaser.Scene {
     EventBus.on("whisper-awakened", this.handleWhisperAwakened, this);
     EventBus.on("slice-objective-updated", this.handleSliceObjectiveUpdated, this);
     EventBus.on("slice-objectives-updated", this.handleSliceObjectivesUpdated, this);
+    EventBus.on("gameplay-loop-updated", this.handleGameplayLoopUpdated, this);
+    EventBus.on("ability-unlocked", this.handleAbilityUnlocked, this);
+    EventBus.on("demon-choice-offered", this.handleWhisperChoice, this);
     this.events.on("shutdown", this.cleanup, this);
 
     this.refresh();
@@ -292,9 +312,39 @@ export class UIScene extends Phaser.Scene {
       .setDepth(HUD_Z + 20)
       .setResolution(2)
       .setVisible(false);
+
+    this.abilityUnlockText = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.34, "", {
+        fontFamily: HUD_FONT,
+        fontSize: "26px",
+        color: "#ffd7a1",
+        stroke: "#2d160f",
+        strokeThickness: 4,
+        backgroundColor: "#120b09cc",
+        padding: { x: 16, y: 8 }
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 25)
+      .setResolution(2)
+      .setAlpha(0)
+      .setVisible(false);
   }
 
   createSliceLayer() {
+    this.minimapGraphics = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 13);
+    this.minimapLabel = this.add
+      .text(MAP_X, MAP_Y - 14, "WORLD  A-B-C", {
+        fontFamily: HUD_FONT,
+        fontSize: "10px",
+        color: "#d7b891"
+      })
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 14)
+      .setResolution(2);
+    this.minimapLabel.setLetterSpacing(1);
+
     this.roomNameText = this.add
       .text(12, 12, "ROOM: START", {
         fontFamily: HUD_FONT,
@@ -310,7 +360,7 @@ export class UIScene extends Phaser.Scene {
     this.roomNameText.setLetterSpacing(1.2);
 
     this.sliceObjectiveText = this.add
-      .text(this.scale.width * 0.5, 104, "Slay the Relic Angel in Start, then claim the relic.", {
+      .text(this.scale.width * 0.5, 104, "Find the gate to the next room.", {
         fontFamily: HUD_ACCENT_FONT,
         fontSize: "14px",
         color: "#ffe2bf",
@@ -323,7 +373,7 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2);
 
     this.sliceChecklistText = this.add
-      .text(this.scale.width * 0.5, 124, "[ ] Kill Angel   [ ] Find Relic", {
+      .text(this.scale.width * 0.5, 124, "[ ] Reach Next Room", {
         fontFamily: HUD_FONT,
         fontSize: "12px",
         color: "#f0cfab",
@@ -360,6 +410,30 @@ export class UIScene extends Phaser.Scene {
       .setDepth(HUD_Z + 8)
       .setResolution(2);
     this.sliceDangerText.setLetterSpacing(1.2);
+
+    this.sliceComboText = this.add
+      .text(this.scale.width - 12, 34, "COMBO: x0", {
+        fontFamily: HUD_FONT,
+        fontSize: "11px",
+        color: "#d9c2a6"
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 8)
+      .setResolution(2);
+    this.sliceComboText.setLetterSpacing(1.2);
+
+    this.sliceThreatText = this.add
+      .text(this.scale.width - 12, 52, "THREAT TIER: 1 | WAVE: --.-s", {
+        fontFamily: HUD_FONT,
+        fontSize: "11px",
+        color: "#d9c2a6"
+      })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 8)
+      .setResolution(2);
+    this.sliceThreatText.setLetterSpacing(1.2);
   }
 
   createDemonLayer() {
@@ -447,10 +521,79 @@ export class UIScene extends Phaser.Scene {
       accept: "E",
       refuse: "R"
     });
+    this.choiceKeys = this.input.keyboard.addKeys({
+      one: "ONE",
+      two: "TWO",
+      numOne: "NUMPAD_ONE",
+      numTwo: "NUMPAD_TWO"
+    });
     this.ttsToggleKey = this.input.keyboard.addKey("V");
 
     this.whisperHudVisible = Boolean(GameState.whisperAwakened || GameState.whisperIntroComplete);
     this.setWhisperHudVisible(this.whisperHudVisible, false);
+
+    this.choiceBackdrop = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x030202)
+      .setAlpha(0.45)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 34);
+    this.choicePanel = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 700, 278, 0x180908)
+      .setStrokeStyle(2, 0xba6d57, 0.96)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 35);
+    this.choiceTitle = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 100, "", {
+        fontFamily: HUD_FONT,
+        fontSize: "24px",
+        color: "#ffd6a8"
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 36)
+      .setResolution(2);
+    this.choicePrompt = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 56, "", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "17px",
+        color: "#f5dfca",
+        align: "center",
+        wordWrap: { width: 640 }
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 36)
+      .setResolution(2);
+    this.choiceLeftText = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 10, "", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "16px",
+        color: "#ffbe9d",
+        align: "center",
+        wordWrap: { width: 640 }
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 36)
+      .setResolution(2);
+    this.choiceRightText = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 58, "", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "16px",
+        color: "#cfdcb0",
+        align: "center",
+        wordWrap: { width: 640 }
+      })
+      .setOrigin(0.5)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 36)
+      .setResolution(2);
   }
 
   refresh() {
@@ -476,19 +619,25 @@ export class UIScene extends Phaser.Scene {
     this.lastCoinValue = GameState.coins;
 
     const slice = GameState.slice ?? {};
+    const currentRoomId = GameState.currentRoomId ?? "start";
+    const inCombatHall = currentRoomId === "shaft";
+    const inReliquary = currentRoomId === "crypt";
+    const shaftAngelDone = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
     if (slice.completed) {
-      this.onSliceObjectiveUpdated({ objective: "Level complete. Survive and reflect." });
+      this.onSliceObjectiveUpdated({ objective: "The reliquary opened. Press forward." });
     } else if (!slice.hasRelic) {
       this.onSliceObjectiveUpdated({
-        objective: slice.relicDropped
-          ? "Claim the relic dropped in Start."
-          : "Slay the Relic Angel in Start, then claim the relic."
+        objective: inReliquary
+          ? slice.relicDropped
+            ? "Claim the Flame Relic in Sealed Reliquary."
+            : "Defeat all 3 angels in Sealed Reliquary."
+          : inCombatHall
+            ? "Slay the angel in Combat Hall, then move to Sealed Reliquary."
+            : "Find the gate to the next room."
       });
     } else {
       this.onSliceObjectiveUpdated({
-        objective: slice.exitSpawned
-          ? "Find exit and escape."
-          : "A breach is forming. Hold your ground."
+        objective: "Return to Sealed Reliquary and cross the fire gate."
       });
     }
     const killAngelDone = Boolean(slice.relicAngelSlain || slice.relicDropped || slice.hasRelic);
@@ -496,8 +645,16 @@ export class UIScene extends Phaser.Scene {
     this.onSliceObjectivesUpdated({
       killAngelDone,
       findRelicDone,
-      extractionReady: Boolean(killAngelDone && findRelicDone && slice.exitSpawned && !slice.completed)
+      extractionReady: Boolean(GameState.hasAbility(ABILITY_IDS.FLAME_RING)),
+      checklistText: inReliquary
+        ? slice.relicDropped
+          ? "[x] Defeat 3 Angels   [ ] Claim Relic"
+          : "[ ] Defeat 3 Angels"
+        : inCombatHall
+          ? `${shaftAngelDone ? "[x]" : "[ ]"} Defeat Angel`
+          : "[ ] Reach Next Room"
     });
+    this.updateMiniMap(GameState.currentRoomId);
   }
 
   onHealthUpdated(healthValue = GameState.health) {
@@ -678,19 +835,117 @@ export class UIScene extends Phaser.Scene {
     const killAngelDone = Boolean(payload?.killAngelDone);
     const findRelicDone = Boolean(payload?.findRelicDone);
     const extractionReady = Boolean(payload?.extractionReady);
-    const checklist = `${killAngelDone ? "[x]" : "[ ]"} Kill Angel   ${findRelicDone ? "[x]" : "[ ]"} Find Relic`;
+    const checklist =
+      payload?.checklistText ??
+      `${GameState.currentRoomId !== "start" ? "[x]" : "[ ]"} Reach Next Room`;
     this.sliceChecklistText.setText(checklist);
-    this.extractPromptText.setVisible(extractionReady);
+    this.extractPromptText.setText("Relic active. Return to Room C gate.");
+    this.extractPromptText.setVisible(extractionReady && !GameState.slice?.completed);
   }
 
   onRoomChangedLabel(roomId) {
     const label = ROOM_LABELS[roomId] ?? String(roomId ?? "UNKNOWN").toUpperCase();
     this.roomNameText?.setText(`ROOM: ${label}`);
+    this.updateMiniMap(roomId);
   }
 
   onWhisperAwakened() {
     this.whisperHudVisible = true;
     this.setWhisperHudVisible(true, true);
+  }
+
+  onGameplayLoopUpdated(payload) {
+    this.killCombo = Math.max(0, payload?.killCombo ?? 0);
+    this.threatTier = Math.max(1, payload?.threatTier ?? 1);
+    this.nextAmbushMs = Math.max(0, payload?.nextAmbushMs ?? 0);
+    this.enemiesDefeated = Math.max(0, payload?.enemiesDefeated ?? 0);
+
+    const comboLeftSec = ((payload?.comboLeftMs ?? 0) / 1000).toFixed(1);
+    if (this.killCombo > 1) {
+      this.sliceComboText?.setText(`COMBO: x${this.killCombo} (${comboLeftSec}s)`);
+      this.sliceComboText?.setColor("#ffc27b");
+    } else {
+      this.sliceComboText?.setText("COMBO: x0");
+      this.sliceComboText?.setColor("#d9c2a6");
+    }
+
+    const waveSec = (this.nextAmbushMs / 1000).toFixed(1);
+    this.sliceThreatText?.setText(`THREAT TIER: ${this.threatTier} | WAVE: ${waveSec}s`);
+    this.sliceThreatText?.setColor(this.threatTier >= 4 ? "#ff9f85" : this.threatTier >= 3 ? "#ffbb94" : "#d9c2a6");
+  }
+
+  onAbilityUnlocked(ability) {
+    const label = ability?.label ?? "Unknown Ability";
+    if (!this.abilityUnlockText) return;
+    this.abilityUnlockText.setText(`NEW ABILITY UNLOCKED\n${label.toUpperCase()}`);
+    this.abilityUnlockText.setVisible(true).setAlpha(0).setScale(0.92);
+    this.tweens.killTweensOf(this.abilityUnlockText);
+    this.tweens.add({
+      targets: this.abilityUnlockText,
+      alpha: 1,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 220,
+      ease: "Back.easeOut"
+    });
+    this.time.delayedCall(1700, () => {
+      if (!this.abilityUnlockText?.active) return;
+      this.tweens.add({
+        targets: this.abilityUnlockText,
+        alpha: 0,
+        duration: 280,
+        ease: "Sine.easeOut",
+        onComplete: () => this.abilityUnlockText?.setVisible(false)
+      });
+    });
+    this.updateMiniMap(GameState.currentRoomId);
+  }
+
+  updateMiniMap(roomId = GameState.currentRoomId) {
+    if (!this.minimapGraphics) return;
+    const rooms = ["start", "shaft", "crypt"];
+    const activeIndex = Math.max(0, rooms.indexOf(roomId));
+    const hasFlameRing = GameState.hasAbility(ABILITY_IDS.FLAME_RING);
+
+    this.minimapGraphics.clear();
+    this.minimapGraphics.lineStyle(2, 0xb98761, 0.8);
+    for (let i = 0; i < rooms.length - 1; i += 1) {
+      const x1 = MAP_X + i * (MAP_ROOM_W + MAP_ROOM_GAP) + MAP_ROOM_W;
+      const x2 = MAP_X + (i + 1) * (MAP_ROOM_W + MAP_ROOM_GAP);
+      const y = MAP_Y + Math.floor(MAP_ROOM_H * 0.5);
+      this.minimapGraphics.beginPath();
+      this.minimapGraphics.moveTo(x1, y);
+      this.minimapGraphics.lineTo(x2, y);
+      this.minimapGraphics.strokePath();
+    }
+
+    rooms.forEach((roomKey, index) => {
+      const x = MAP_X + index * (MAP_ROOM_W + MAP_ROOM_GAP);
+      const y = MAP_Y;
+      const isCurrent = index === activeIndex;
+      const lockedC = roomKey === "crypt" && !hasFlameRing;
+      const fillColor = isCurrent ? 0xffca84 : lockedC ? 0x56362a : 0x91715b;
+      const fillAlpha = isCurrent ? 0.95 : lockedC ? 0.55 : 0.78;
+      this.minimapGraphics.fillStyle(fillColor, fillAlpha);
+      this.minimapGraphics.fillRoundedRect(x, y, MAP_ROOM_W, MAP_ROOM_H, 3);
+      this.minimapGraphics.lineStyle(1, isCurrent ? 0xffebbe : 0xdec2a0, isCurrent ? 0.95 : 0.75);
+      this.minimapGraphics.strokeRoundedRect(x, y, MAP_ROOM_W, MAP_ROOM_H, 3);
+      if (lockedC) {
+        this.minimapGraphics.lineStyle(1, 0xff7a4a, 0.9);
+        this.minimapGraphics.beginPath();
+        this.minimapGraphics.moveTo(x + 4, y + 3);
+        this.minimapGraphics.lineTo(x + MAP_ROOM_W - 4, y + MAP_ROOM_H - 3);
+        this.minimapGraphics.strokePath();
+      }
+    });
+  }
+
+  formatAbilityLabel(abilityId) {
+    if (!abilityId) return "a missing power";
+    return String(abilityId)
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
   }
 
   showWhisper(message) {
@@ -720,6 +975,15 @@ export class UIScene extends Phaser.Scene {
 
   showDeal(deal) {
     if (!deal) return;
+    if (this.activeChoice) {
+      this.activeChoice = null;
+      this.choiceBackdrop?.setVisible(false);
+      this.choicePanel?.setVisible(false);
+      this.choiceTitle?.setVisible(false);
+      this.choicePrompt?.setVisible(false);
+      this.choiceLeftText?.setVisible(false);
+      this.choiceRightText?.setVisible(false);
+    }
     this.activeOffer = deal;
     this.dealBackdrop.setVisible(true);
     this.dealPanel.setVisible(true);
@@ -729,6 +993,25 @@ export class UIScene extends Phaser.Scene {
       .setText(`${deal.description}\nCost: +${deal.corruptionCost} corruption`);
     this.dealActions.setVisible(true);
     this.hungerVoice?.speakOffer(deal);
+  }
+
+  showWhisperChoice(choice) {
+    if (!choice) return;
+    if (this.activeOffer) {
+      this.resolveDeal("refuse");
+    }
+    this.activeChoice = choice;
+    this.choiceBackdrop?.setVisible(true);
+    this.choicePanel?.setVisible(true);
+    this.choiceTitle?.setVisible(true).setText(`Whisper Choice: ${choice.title}`);
+    this.choicePrompt?.setVisible(true).setText(choice.prompt ?? "");
+    this.choiceLeftText
+      ?.setVisible(true)
+      .setText(`[1] ${choice.left?.label ?? "Option One"}\n${choice.left?.description ?? ""}`);
+    this.choiceRightText
+      ?.setVisible(true)
+      .setText(`[2] ${choice.right?.label ?? "Option Two"}\n${choice.right?.description ?? ""}`);
+    this.hungerVoice?.speakWhisper(choice.prompt ?? choice.title);
   }
 
   resolveDeal(decision) {
@@ -743,6 +1026,21 @@ export class UIScene extends Phaser.Scene {
     this.dealTitle.setVisible(false);
     this.dealDesc.setVisible(false);
     this.dealActions.setVisible(false);
+  }
+
+  resolveWhisperChoice(decision) {
+    if (!this.activeChoice) return;
+    EventBus.emit("demon-choice-response", {
+      decision,
+      choiceId: this.activeChoice.id
+    });
+    this.activeChoice = null;
+    this.choiceBackdrop?.setVisible(false);
+    this.choicePanel?.setVisible(false);
+    this.choiceTitle?.setVisible(false);
+    this.choicePrompt?.setVisible(false);
+    this.choiceLeftText?.setVisible(false);
+    this.choiceRightText?.setVisible(false);
   }
 
   drawCorruptionBar() {
@@ -822,6 +1120,19 @@ export class UIScene extends Phaser.Scene {
         this.resolveDeal("refuse");
       }
     }
+    if (this.activeChoice) {
+      if (
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.one) ||
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.numOne)
+      ) {
+        this.resolveWhisperChoice("left");
+      } else if (
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.two) ||
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.numTwo)
+      ) {
+        this.resolveWhisperChoice("right");
+      }
+    }
 
     if (Phaser.Input.Keyboard.JustDown(this.ttsToggleKey)) {
       this.hungerVoice?.toggle();
@@ -842,6 +1153,9 @@ export class UIScene extends Phaser.Scene {
     EventBus.off("whisper-awakened", this.handleWhisperAwakened, this);
     EventBus.off("slice-objective-updated", this.handleSliceObjectiveUpdated, this);
     EventBus.off("slice-objectives-updated", this.handleSliceObjectivesUpdated, this);
+    EventBus.off("gameplay-loop-updated", this.handleGameplayLoopUpdated, this);
+    EventBus.off("ability-unlocked", this.handleAbilityUnlocked, this);
+    EventBus.off("demon-choice-offered", this.handleWhisperChoice, this);
     this.hungerVoice?.destroy();
     this.hungerVoice = null;
     this.healthFlame?.destroy();
@@ -850,7 +1164,12 @@ export class UIScene extends Phaser.Scene {
 
   setWhisperHudVisible(visible, animate = false) {
     const alpha = visible ? 1 : 0;
-    const targets = [this.corruptionLabel, this.sliceDangerText].filter(Boolean);
+    const targets = [
+      this.corruptionLabel,
+      this.sliceDangerText,
+      this.sliceComboText,
+      this.sliceThreatText
+    ].filter(Boolean);
     this.corruptionTrack?.setAlpha(alpha);
     this.corruptionFill?.setAlpha(alpha);
     targets.forEach((target) => {

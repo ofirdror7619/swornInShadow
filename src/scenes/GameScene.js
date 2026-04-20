@@ -5,7 +5,7 @@ import { AbilitySystem } from "../systems/AbilitySystem";
 import { PlayerController } from "../systems/PlayerController";
 import { FlightFxController } from "../systems/FlightFxController";
 import { RoomManager } from "../world/RoomManager";
-import { ABILITY_IDS } from "../data/abilities";
+import { ABILITIES, ABILITY_IDS } from "../data/abilities";
 import { EventBus } from "../core/EventBus";
 import { CombatSystem } from "../systems/CombatSystem";
 import { DemonAgent } from "../systems/DemonAgent";
@@ -13,9 +13,9 @@ import { DemonAgent } from "../systems/DemonAgent";
 const LEVEL_MUSIC_KEY = "music-level-1";
 
 const ROOM_LABELS = {
-  start: "Start",
-  shaft: "Shaft",
-  sanctum: "Sanctum"
+  start: "Start Chamber",
+  shaft: "Combat Hall",
+  crypt: "Sealed Reliquary"
 };
 
 const WHISPER_INTRO_LINES = [
@@ -28,6 +28,16 @@ const WHISPER_INTRO_LINES = [
 const WHISPER_INTRO_START_DELAY_MS = 900;
 // UI whisper queue enforces voice-end sequencing; keep emitter cadence tight.
 const WHISPER_INTRO_LINE_GAP_MS = 120;
+const LEVEL_TRANSITION_DELAY_MS = 950;
+const COMBO_WINDOW_MS = 3200;
+const THREAT_KILL_STEP = 5;
+const MAX_THREAT_TIER = 5;
+const AMBUSH_INTERVAL_BASE_MS = 28000;
+const AMBUSH_INTERVAL_STEP_MS = 3600;
+const AMBUSH_INTERVAL_MIN_MS = 10000;
+const CORRUPTION_TIER1 = 25;
+const CORRUPTION_TIER2 = 50;
+const CORRUPTION_TIER3 = 75;
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -37,6 +47,12 @@ export class GameScene extends Phaser.Scene {
     this.auraBoostUntil = 0;
     this.runCompletedAt = 0;
     this.levelEnding = false;
+    this.killCombo = 0;
+    this.comboExpiresAt = 0;
+    this.enemiesDefeated = 0;
+    this.threatTier = 1;
+    this.nextAmbushAt = 0;
+    this.corruptionTier = 0;
   }
 
   create() {
@@ -50,7 +66,9 @@ export class GameScene extends Phaser.Scene {
     this.demonAgent = new DemonAgent({
       onWhisper: (text) => EventBus.emit("demon-whisper", text),
       onOffer: (deal) => EventBus.emit("demon-offer", deal),
-      onStateChanged: (state) => EventBus.emit("demon-state-updated", state)
+      onChoice: (choice) => EventBus.emit("demon-choice-offered", choice),
+      onStateChanged: (state) => EventBus.emit("demon-state-updated", state),
+      initialState: GameState.demon
     });
     this.demonAgent.setNarrationLocked(!GameState.whisperIntroComplete);
     if (GameState.whisperAwakened) {
@@ -59,8 +77,18 @@ export class GameScene extends Phaser.Scene {
     EventBus.emit("demon-state-updated", this.demonAgent.getState());
 
     this.roomManager.buildRoom(GameState.currentRoomId, GameState.playerSpawnKey);
+    this.roomManager.setCorruptionState(this.demonAgent.getState().corruption);
     this.physics.add.collider(this.player, this.roomManager.platforms);
+    this.physics.add.collider(this.player, this.roomManager.corruptionBlocks);
     this.physics.add.collider(this.roomManager.enemies, this.roomManager.platforms);
+    this.physics.add.collider(this.roomManager.enemies, this.roomManager.corruptionBlocks);
+    this.physics.add.collider(
+      this.player,
+      this.roomManager.gates,
+      undefined,
+      (_player, gate) => !this.abilitySystem.has(gate.requiredAbility),
+      this
+    );
 
     this.physics.add.overlap(this.player, this.roomManager.gates, (_, gate) => {
       if (!this.abilitySystem.has(gate.requiredAbility)) {
@@ -86,6 +114,8 @@ export class GameScene extends Phaser.Scene {
       this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
     }
     this.emitSliceHudState();
+    this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
+    this.emitGameplayLoopHud();
 
     this.events.once("shutdown", () => {
       this.unregisterDemonHooks();
@@ -113,6 +143,7 @@ export class GameScene extends Phaser.Scene {
       this.flightFx?.playMovementTrail(this.player.x, this.player.y, delta);
     }
     this.roomManager.updateRoomTransitions();
+    this.updateDynamicChallenge(time);
     this.demonAgent.tick(time, {
       healthPct: GameState.health / Math.max(1, GameState.maxHealth),
       isIdle: time - this.lastMoveAt >= 5000
@@ -125,17 +156,27 @@ export class GameScene extends Phaser.Scene {
 
   registerDemonHooks() {
     this.handleEnemyKilled = (payload) => {
+      this.handleEnemyDefeated(payload);
+      if (payload?.isRoomEnemy && payload?.spawnRoomId && payload?.spawnEnemyId) {
+        GameState.markRoomEnemyDefeated(payload.spawnRoomId, payload.spawnEnemyId);
+      }
       if (payload?.enemyType === "angel" && !GameState.whisperAwakened) {
         this.startWhisperAwakeningSequence();
       }
       if (this.isWhisperInteractive()) {
         this.demonAgent.onEvent("enemy_killed", this.time.now);
       }
-      if (payload?.carriesRelic && !GameState.slice.hasRelic) {
+      const killRoomId = payload?.roomId ?? GameState.currentRoomId;
+      const cryptClearedNow =
+        killRoomId === "crypt" &&
+        !GameState.slice.hasRelic &&
+        !GameState.slice.relicDropped &&
+        this.roomManager.getCurrentRoomEnemyCount() === 0;
+      if ((payload?.carriesRelic || cryptClearedNow) && !GameState.slice.hasRelic) {
         GameState.slice.relicAngelSlain = true;
         this.roomManager.spawnRelicDrop(payload.x, payload.y - 96);
-        this.showHint("The Relic Angel has fallen. Claim the relic.");
-        this.emitSliceHudState(payload.roomId ?? GameState.currentRoomId);
+        this.showHint("Final angel fallen. Claim the Flame Relic.");
+        this.emitSliceHudState(killRoomId);
       }
     };
     this.handlePlayerDamaged = (payload) => {
@@ -159,6 +200,7 @@ export class GameScene extends Phaser.Scene {
         this.demonAgent.onEvent("room_entered", this.time.now, { roomId });
       }
       this.emitSliceHudState(roomId);
+      this.emitGameplayLoopHud();
       const label = ROOM_LABELS[roomId] ?? roomId;
       this.showHint(`Entered: ${label}`);
     };
@@ -173,6 +215,20 @@ export class GameScene extends Phaser.Scene {
         this.demonAgent.refuseDeal();
       }
     };
+    this.handleChoiceResponse = (payload) => {
+      if (!this.isWhisperInteractive()) return;
+      const result = this.demonAgent.resolveChoice(payload?.decision, this.time.now);
+      if (result) {
+        this.applyWhisperChoiceEffect(result);
+      }
+    };
+    this.handleGateBlockedForDemon = () => {
+      if (!this.isWhisperInteractive()) return;
+      this.demonAgent.onEvent("gate_blocked", this.time.now, { roomId: GameState.currentRoomId });
+    };
+    this.handleDemonState = (state) => {
+      this.onCorruptionStateUpdated(state);
+    };
 
     EventBus.on("enemy-killed", this.handleEnemyKilled, this);
     EventBus.on("player-damaged", this.handlePlayerDamaged, this);
@@ -180,24 +236,23 @@ export class GameScene extends Phaser.Scene {
     EventBus.on("chest-opened", this.handleChestOpened, this);
     EventBus.on("room-changed", this.handleRoomChanged, this);
     EventBus.on("demon-deal-response", this.handleDealResponse, this);
+    EventBus.on("demon-choice-response", this.handleChoiceResponse, this);
+    EventBus.on("gate-blocked", this.handleGateBlockedForDemon, this);
+    EventBus.on("demon-state-updated", this.handleDemonState, this);
   }
 
   registerSliceHooks() {
     this.handleSliceRelicCollected = () => {
-      const exit = this.roomManager.spawnExitPortalRandom();
-      if (exit) {
-        const label = ROOM_LABELS[exit.roomId] ?? exit.roomId;
-        this.showHint(`A breach opens in ${label}. Find it and escape.`);
-      } else {
-        this.showHint("A breach opens. Find the exit and escape.");
+      if (!this.abilitySystem.has(ABILITY_IDS.FLAME_RING)) {
+        this.abilitySystem.unlock(ABILITY_IDS.FLAME_RING);
+        EventBus.emit("abilities-updated");
+        EventBus.emit("ability-unlocked", ABILITIES[ABILITY_IDS.FLAME_RING]);
       }
-      if (GameState.slice.relicAngelSlain || GameState.slice.relicDropped) {
-        this.showHint("Objectives complete. Extract.");
-      }
+      this.showHint("Flame Relic claimed. Return to the sealed gate.");
       this.emitSliceHudState();
     };
     this.handleSliceCheckpoint = () => {
-      this.showHint("Checkpoint active. Press on to the sanctum.");
+      this.showHint("Checkpoint bound.");
       this.emitSliceHudState();
     };
     this.handleSliceExitSpawned = (payload) => {
@@ -205,14 +260,24 @@ export class GameScene extends Phaser.Scene {
     };
     this.handleSliceFinished = (payload) => {
       this.runCompletedAt = this.time.now;
+      this.killCombo = 0;
+      this.comboExpiresAt = 0;
       const escaped = payload?.triggerId === "level-exit";
-      this.showHint(escaped ? "Run complete. You escaped." : "Run complete. The ritual held.");
+      if (escaped && (GameState.currentLevel ?? 1) === 1) {
+        this.showHint("Level 1 complete. Descending to Level 2...");
+      } else {
+        this.showHint(escaped ? "Run complete. You escaped." : "Run complete. The ritual held.");
+      }
       if (this.isWhisperInteractive()) {
         this.demonAgent.onEvent("secret_found", this.time.now);
       }
       this.emitSliceHudState();
       if (escaped) {
-        this.endLevel1();
+        if ((GameState.currentLevel ?? 1) === 1) {
+          this.startLevel2();
+        } else {
+          this.endLevel1();
+        }
       }
     };
 
@@ -229,6 +294,9 @@ export class GameScene extends Phaser.Scene {
     EventBus.off("chest-opened", this.handleChestOpened, this);
     EventBus.off("room-changed", this.handleRoomChanged, this);
     EventBus.off("demon-deal-response", this.handleDealResponse, this);
+    EventBus.off("demon-choice-response", this.handleChoiceResponse, this);
+    EventBus.off("gate-blocked", this.handleGateBlockedForDemon, this);
+    EventBus.off("demon-state-updated", this.handleDemonState, this);
   }
 
   unregisterSliceHooks() {
@@ -258,6 +326,71 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  applyWhisperChoiceEffect(result) {
+    const effect = result?.option?.effect;
+    if (!effect) return;
+    if (effect === "embrace_gate") {
+      this.auraBoostUntil = this.time.now + 12000;
+      this.moveBoostUntil = this.time.now + 8000;
+      this.triggerAmbushWave("whisper-embrace");
+      EventBus.emit("world-hint", "Whisper pact sealed. Power floods your veins.");
+      return;
+    }
+    if (effect === "resist_gate") {
+      this.roomManager.spawnAmbushPack(Math.max(1, this.threatTier), "whisper-resist");
+      EventBus.emit("world-hint", "You resisted. The world lashes back.");
+      return;
+    }
+    if (effect === "embrace_low_health") {
+      GameState.health = Math.min(GameState.maxHealth, GameState.health + 28);
+      EventBus.emit("health-updated", GameState.health);
+      this.auraBoostUntil = this.time.now + 10000;
+      EventBus.emit("world-hint", "Blood covenant accepted. Vital restored.");
+      return;
+    }
+    if (effect === "resist_low_health") {
+      EventBus.emit("world-hint", "You clenched through the pain.");
+      return;
+    }
+    if (effect === "embrace_streak") {
+      this.moveBoostUntil = this.time.now + 9000;
+      this.auraBoostUntil = this.time.now + 9000;
+      this.triggerAmbushWave("whisper-feast");
+      EventBus.emit("world-hint", "You fed the Whisper. The hunt escalates.");
+      return;
+    }
+    if (effect === "resist_streak") {
+      const healed = Math.min(GameState.maxHealth, GameState.health + 10);
+      if (healed !== GameState.health) {
+        GameState.health = healed;
+        EventBus.emit("health-updated", GameState.health);
+      }
+      EventBus.emit("world-hint", "Voice denied. Your will hardens.");
+    }
+  }
+
+  onCorruptionStateUpdated(state) {
+    const corruption = state?.corruption ?? 0;
+    GameState.demon = { ...state };
+    this.roomManager.setCorruptionState(corruption);
+    const tier = this.getCorruptionTier(corruption);
+    if (tier !== this.corruptionTier) {
+      this.corruptionTier = tier;
+      if (tier > 0) {
+        this.showHint(`Corruption Tier ${tier}: the rooms are mutating.`);
+      } else {
+        this.showHint("Corruption subsides. The world steadies.");
+      }
+    }
+  }
+
+  getCorruptionTier(corruption = 0) {
+    if (corruption >= CORRUPTION_TIER3) return 3;
+    if (corruption >= CORRUPTION_TIER2) return 2;
+    if (corruption >= CORRUPTION_TIER1) return 1;
+    return 0;
+  }
+
   updateDealBuffs(now) {
     const moveMultiplier = now < this.moveBoostUntil ? 1.4 : 1;
     const auraMultiplier = now < this.auraBoostUntil ? 1.5 : 1;
@@ -271,36 +404,142 @@ export class GameScene extends Phaser.Scene {
 
   emitSliceHudState(roomId = GameState.currentRoomId) {
     const slice = GameState.slice ?? {};
-    const killAngelDone = Boolean(slice.relicAngelSlain || slice.relicDropped || slice.hasRelic);
+    const currentRoomId = roomId ?? GameState.currentRoomId;
+    const inCombatHall = currentRoomId === "shaft";
+    const inReliquary = currentRoomId === "crypt";
+    const shaftAngelDone = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
+    const reliquaryCleared = Boolean(slice.relicDropped || slice.hasRelic);
+    const killAngelDone = Boolean(shaftAngelDone || slice.relicAngelSlain || reliquaryCleared);
     const findRelicDone = Boolean(slice.hasRelic);
-    const extractionReady = Boolean(killAngelDone && findRelicDone && slice.exitSpawned && !slice.completed);
-    let phase = "SEEK THE RELIC";
-    let objective = "Hunt the Relic Angel in Start.";
+    const extractionReady = Boolean(this.abilitySystem.has(ABILITY_IDS.FLAME_RING));
+    let phase = "FIND THE POWER";
+    let objective = "Find the gate to the next room.";
+    let checklistText = "[ ] Reach Next Room";
 
     if (slice.completed) {
-      phase = "RITUAL COMPLETE";
-      objective = "Level complete. Survive and reflect.";
+      phase = "SEAL BROKEN";
+      objective = "The reliquary yielded. Push deeper into the world.";
     } else if (!slice.hasRelic) {
-      phase = "SEEK THE RELIC";
-      objective = slice.relicDropped
-        ? "Claim the relic dropped in Start."
-        : "Slay the Relic Angel in Start, then claim the relic.";
+      phase = "FIND THE POWER";
+      if (inReliquary && slice.relicDropped) {
+        objective = "Claim the Flame Relic in Sealed Reliquary.";
+        checklistText = "[x] Defeat 3 Angels   [ ] Claim Relic";
+      } else if (inReliquary) {
+        objective = "Defeat all 3 angels in Sealed Reliquary.";
+        checklistText = "[ ] Defeat 3 Angels";
+      } else if (inCombatHall) {
+        objective = "Slay the angel in Combat Hall, then move to Sealed Reliquary.";
+        checklistText = `${shaftAngelDone ? "[x]" : "[ ]"} Defeat Angel`;
+      } else {
+        objective = "Find the gate to the next room.";
+        checklistText = "[ ] Reach Next Room";
+      }
     } else {
-      phase = "FIND THE EXIT";
-      objective = slice.exitSpawned
-        ? "Find exit and escape."
-        : "A breach is forming. Hold your ground.";
+      phase = "RETURN TO C";
+      objective = "Return to Sealed Reliquary and cross the fire gate.";
+      checklistText = "[x] Claim Relic";
     }
 
     EventBus.emit("slice-objective-updated", {
       objective,
+      phase,
       roomId
     });
     EventBus.emit("slice-objectives-updated", {
       killAngelDone,
       findRelicDone,
       extractionReady,
+      checklistText,
       roomId
+    });
+  }
+
+  handleEnemyDefeated(payload) {
+    const now = this.time.now;
+    this.enemiesDefeated += 1;
+    this.killCombo = now <= this.comboExpiresAt ? this.killCombo + 1 : 1;
+    this.comboExpiresAt = now + COMBO_WINDOW_MS;
+
+    const auraCharge = Phaser.Math.Clamp(0.05 + this.killCombo * 0.02, 0.05, 0.2);
+    this.combat?.grantAuraCharge(auraCharge);
+    if (this.killCombo >= 3) {
+      const healAmount = Math.min(8, 1 + Math.floor(this.killCombo / 2));
+      const healed = Math.min(GameState.maxHealth, GameState.health + healAmount);
+      if (healed !== GameState.health) {
+        GameState.health = healed;
+        EventBus.emit("health-updated", GameState.health);
+      }
+      if (this.killCombo === 3 || this.killCombo % 4 === 0) {
+        this.showHint(`Combo x${this.killCombo}! Vital siphon +${healAmount}`);
+      }
+    }
+
+    const expectedTier = Phaser.Math.Clamp(
+      1 + Math.floor(this.enemiesDefeated / THREAT_KILL_STEP),
+      1,
+      MAX_THREAT_TIER
+    );
+    if (expectedTier > this.threatTier) {
+      this.threatTier = expectedTier;
+      this.showHint(`Threat rising: Tier ${this.threatTier}`);
+    }
+    this.emitGameplayLoopHud();
+
+    if (this.killCombo >= 5 && this.isWhisperInteractive()) {
+      this.demonAgent.onEvent("kill_streak", now);
+    }
+    if (this.killCombo >= 6 && now + 500 > this.nextAmbushAt) {
+      this.triggerAmbushWave("combo");
+    }
+
+    if (payload?.enemyType === "angel" && this.threatTier >= 2 && Math.random() < 0.45) {
+      this.triggerAmbushWave("angel-fall");
+    }
+  }
+
+  updateDynamicChallenge(now) {
+    if (GameState.slice?.completed || this.levelEnding) return;
+
+    if (this.killCombo > 0 && now > this.comboExpiresAt) {
+      this.killCombo = 0;
+      this.emitGameplayLoopHud();
+    }
+
+    if (now < this.nextAmbushAt) return;
+    const aliveEnemies = this.roomManager.getCurrentRoomEnemyCount();
+    const aliveCap = 3 + this.threatTier;
+    if (aliveEnemies < aliveCap) {
+      this.triggerAmbushWave("timer");
+      return;
+    }
+    this.nextAmbushAt = now + Math.round(this.getAmbushIntervalMs() * 0.6);
+    this.emitGameplayLoopHud();
+  }
+
+  triggerAmbushWave(source = "timer") {
+    if (GameState.slice?.completed || this.levelEnding) return;
+    const spawned = this.roomManager.spawnAmbushPack(this.threatTier, source);
+    this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
+    if (spawned > 0) {
+      const sourceText = source === "timer" ? "Shadows gather." : "Hostiles surge!";
+      this.showHint(`${sourceText} Ambush x${spawned}`);
+    }
+    this.emitGameplayLoopHud();
+  }
+
+  getAmbushIntervalMs() {
+    const tierReduction = (this.threatTier - 1) * AMBUSH_INTERVAL_STEP_MS;
+    const levelReduction = ((GameState.currentLevel ?? 1) - 1) * 2200;
+    return Math.max(AMBUSH_INTERVAL_MIN_MS, AMBUSH_INTERVAL_BASE_MS - tierReduction - levelReduction);
+  }
+
+  emitGameplayLoopHud() {
+    EventBus.emit("gameplay-loop-updated", {
+      killCombo: this.killCombo,
+      comboLeftMs: Math.max(0, this.comboExpiresAt - this.time.now),
+      enemiesDefeated: this.enemiesDefeated,
+      threatTier: this.threatTier,
+      nextAmbushMs: Math.max(0, this.nextAmbushAt - this.time.now)
     });
   }
 
@@ -354,6 +593,39 @@ export class GameScene extends Phaser.Scene {
       if (!this.scene.isActive("game")) return;
       this.scene.stop("ui");
       this.scene.start("menu");
+    });
+  }
+
+  startLevel2() {
+    if (this.levelEnding) return;
+    this.levelEnding = true;
+
+    this.controller?.setSpeedMultiplier(0);
+    this.player?.setVelocity(0, 0);
+
+    this.time.delayedCall(LEVEL_TRANSITION_DELAY_MS, () => {
+      if (!this.scene.isActive("game")) return;
+
+      GameState.currentLevel = 2;
+      GameState.resetSliceProgress();
+      GameState.health = GameState.maxHealth;
+
+      this.moveBoostUntil = 0;
+      this.auraBoostUntil = 0;
+      this.runCompletedAt = 0;
+      this.levelEnding = false;
+      this.killCombo = 0;
+      this.comboExpiresAt = 0;
+      this.enemiesDefeated = 0;
+      this.threatTier = 2;
+      this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
+
+      EventBus.emit("health-updated", GameState.health);
+      this.roomManager.buildRoom(GameState.currentRoomId, GameState.playerSpawnKey);
+      this.emitSliceHudState(GameState.currentRoomId);
+      this.emitGameplayLoopHud();
+      this.showHint("Level 2 begins. The Whisper deepens.");
+      this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
     });
   }
 }

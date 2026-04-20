@@ -1,7 +1,8 @@
 export const ABILITY_IDS = {
   DASH: "dash",
   DOUBLE_JUMP: "double_jump",
-  WALL_CLIMB: "wall_climb"
+  WALL_CLIMB: "wall_climb",
+  FLAME_RING: "flame_ring"
 };
 
 export const ABILITIES = {
@@ -19,5 +20,10 @@ export const ABILITIES = {
     id: ABILITY_IDS.WALL_CLIMB,
     label: "Wall Climb",
     description: "Scale vertical shafts."
+  },
+  [ABILITY_IDS.FLAME_RING]: {
+    id: ABILITY_IDS.FLAME_RING,
+    label: "Ring of Flames",
+    description: "Pass through sacred fire barriers."
   }
 };
