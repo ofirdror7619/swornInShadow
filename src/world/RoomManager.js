@@ -3,6 +3,7 @@ import { ROOMS, ROOM_DIMENSIONS } from "../data/rooms";
 import { GameState } from "../core/GameState";
 import { EventBus } from "../core/EventBus";
 import { EnemyAngel } from "../entities/EnemyAngel";
+import { FallenSeraph } from "../entities/FallenSeraph";
 
 const BIG_PLATFORM_KEYS = ["platform-big-1", "platform-big-2"];
 const MEDIUM_PLATFORM_KEYS = ["platform-medium-1", "platform-medium-2", "platform-medium-3"];
@@ -25,8 +26,17 @@ const LEVEL2_FLOOR_ELEMENT_MIN_SCALE = 0.78;
 const LEVEL2_FLOOR_ELEMENT_MAX_SCALE = 1.28;
 const CHEST_COIN_REWARD = 25;
 const CHEST_SCALE = 0.21;
-const CHEST_VISIBLE_BOTTOM_ORIGIN_Y = 370 / 409;
+const CHEST_PLATFORM_ORIGIN_Y = 1;
+const CHEST_PLATFORM_SINK_Y = 42;
 const CHEST_MIN_PLATFORM_MARGIN = 42;
+const CHEST_VISUAL_SINK_Y = 44;
+const ROOM_CHEST_ID = "main-chest";
+const MISSION_CHEST_ROOM_ID = "crypt";
+const MISSION_CHEST_ID = "mission-1-huge-chest";
+const MISSION_CHEST_TEXTURE_KEY = "huge-chest";
+const MISSION_CHEST_SCALE = 0.34;
+const MISSION_CHEST_ORIGIN_Y = 1;
+const MISSION_CHEST_SINK_Y = 62;
 const SLICE_TRIGGER_ALPHA = 0.001;
 const RELIC_TEXTURE_KEY = "relic-object";
 const RELIC_FLOAT_PIXELS = 9;
@@ -36,11 +46,13 @@ const RELIC_TRIGGER_H = 92;
 const RELIC_PICKUP_LOCK_MS = 700;
 const EXIT_TEXTURE_KEY = "exit-portal";
 const EXIT_APPEAR_SFX_KEY = "sfx-exit-appear";
+const CHEST_OPEN_SFX_KEY = "sfx-treasure-chest";
 const EXIT_TRIGGER_W = 42;
 const EXIT_TRIGGER_H = 52;
-const EXIT_VISIBLE_BOTTOM_ORIGIN_Y = CHEST_VISIBLE_BOTTOM_ORIGIN_Y;
+const EXIT_VISIBLE_BOTTOM_ORIGIN_Y = 0.78;
 const EXIT_PLATFORM_Y_OFFSET = 20;
 const EXIT_APPEAR_SFX_VOLUME = 0.9;
+const CHEST_OPEN_SFX_VOLUME = 0.82;
 const EXIT_SPAWN_FLASH_MS = 170;
 const EXIT_SPAWN_SHAKE_MS = 120;
 const EXIT_SPAWN_SHAKE_INTENSITY = 0.0018;
@@ -53,17 +65,28 @@ const BG_LAYER_1_SCROLL_FACTOR = 1;
 const BG_LAYER_2_SCROLL_FACTOR = 0.55;
 const BG_CEILING_SCROLL_FACTOR = 0.62;
 const BG_CEILING_SCALE_MULTIPLIER = 0.6;
+const BG_CEILING_TILT_DEGREES = 0.9;
+const BG_CEILING_TILT_MS = 3400;
 const WORLD_DEPTH_BASE = 300;
 const PLATFORM_DEPTH = 460;
 const ROOM_GATE_DEPTH = 620;
-const ROOM_GATE_MARGIN_X = 28;
+const ROOM_GATE_MARGIN_X = 0;
 const ROOM_GATE_MARGIN_Y = 12;
 const ROOM_GATE_WIDTH = 112;
 const ROOM_GATE_HEIGHT = 224;
+const ROOM_GATE_ALPHA = 0.92;
+const ROOM_GATE_PORTAL_CENTER_X_RATIO = 0.48;
+const ROOM_GATE_PORTAL_CENTER_Y_RATIO = 0.62;
+const ROOM_GATE_PORTAL_MASK_WIDTH_RATIO = 0.52;
+const ROOM_GATE_PORTAL_MASK_HEIGHT_RATIO = 0.6;
+const ROOM_GATE_VORTEX_ALPHA = 0.5;
+const ROOM_GATE_VORTEX_ROTATE_MS_FAST = 5200;
 const ROOM_EXIT_TRIGGER_DEPTH_RATIO = 0.42;
 const RELIC_DEPTH_OFFSET = 18;
+const CHEST_DEPTH_OFFSET = -12;
 const ENEMY_FACTORIES = {
-  angel: EnemyAngel
+  angel: EnemyAngel,
+  fallen_seraph: FallenSeraph
 };
 const AMBUSH_BASE_COUNT = 1;
 const AMBUSH_MAX_COUNT = 4;
@@ -129,6 +152,7 @@ export class RoomManager {
     this.backgroundLayer1 = null;
     this.backgroundLayer2 = null;
     this.ceilingLayer = null;
+    this.ceilingTiltTween = null;
     this.isTransitioning = false;
     this.corruption = 0;
     this.corruptionTier = 0;
@@ -164,6 +188,7 @@ export class RoomManager {
     this.ceilingLayer.setScale(
       (ROOM_DIMENSIONS.width / Math.max(1, this.ceilingLayer.width)) * BG_CEILING_SCALE_MULTIPLIER
     );
+    this.startCeilingAmbientMotion();
 
     const isLevel2 = (GameState.currentLevel ?? 1) >= 2;
     if (isLevel2) {
@@ -186,20 +211,49 @@ export class RoomManager {
     }
 
     const platformBodies = this.platforms?.getChildren?.() ?? [];
-    if (platformBodies.length > 0) {
-      const chosenPlatform = Phaser.Utils.Array.GetRandom(platformBodies);
-      const bounds = chosenPlatform?.body;
-      if (bounds) {
-        const minX = Math.round(bounds.left + CHEST_MIN_PLATFORM_MARGIN);
-        const maxX = Math.round(bounds.right - CHEST_MIN_PLATFORM_MARGIN);
-        const chestX = maxX > minX ? Phaser.Math.Between(minX, maxX) : Math.round((bounds.left + bounds.right) * 0.5);
-        const platformTop = bounds.top;
-        const chest = this.treasureChests.create(chestX, platformTop, "treasure-chest");
-        chest.setOrigin(0.5, CHEST_VISIBLE_BOTTOM_ORIGIN_Y);
+    if (this.shouldSpawnMissionChest(roomId)) {
+      this.spawnMissionChest(room);
+    } else if (platformBodies.length > 0 && !GameState.isRoomChestOpened(roomId, ROOM_CHEST_ID)) {
+      let chestX = null;
+      let chestY = null;
+
+      const platformVisuals = this.platformVisuals?.getChildren?.() ?? [];
+      if (platformVisuals.length > 0) {
+        const chosenVisual = Phaser.Utils.Array.GetRandom(platformVisuals);
+        const visualBounds = chosenVisual?.getBounds?.();
+        if (visualBounds) {
+          const margin = Math.min(
+            CHEST_MIN_PLATFORM_MARGIN,
+            Math.max(12, Math.floor(visualBounds.width * 0.18))
+          );
+          const minX = Math.round(visualBounds.left + margin);
+          const maxX = Math.round(visualBounds.right - margin);
+          chestX =
+            maxX > minX
+              ? Phaser.Math.Between(minX, maxX)
+              : Math.round((visualBounds.left + visualBounds.right) * 0.5);
+          chestY = Math.round(visualBounds.top + CHEST_VISUAL_SINK_Y);
+        }
+      }
+
+      if (chestX === null || chestY === null) {
+        const chosenPlatform = Phaser.Utils.Array.GetRandom(platformBodies);
+        const bounds = chosenPlatform?.body;
+        if (bounds) {
+          const minX = Math.round(bounds.left + CHEST_MIN_PLATFORM_MARGIN);
+          const maxX = Math.round(bounds.right - CHEST_MIN_PLATFORM_MARGIN);
+          chestX = maxX > minX ? Phaser.Math.Between(minX, maxX) : Math.round((bounds.left + bounds.right) * 0.5);
+          chestY = Math.round(bounds.top + CHEST_PLATFORM_SINK_Y);
+        }
+      }
+
+      if (chestX !== null && chestY !== null) {
+        const chest = this.treasureChests.create(chestX, chestY, "treasure-chest");
+        chest.setOrigin(0.5, CHEST_PLATFORM_ORIGIN_Y);
         chest.setDepth(650);
         chest.setScale(CHEST_SCALE);
-        const bottomOffset = chest.displayHeight * (1 - CHEST_VISIBLE_BOTTOM_ORIGIN_Y);
-        chest.setY(platformTop - bottomOffset);
+        chest.spawnRoomId = roomId;
+        chest.spawnChestId = ROOM_CHEST_ID;
         chest.refreshBody();
       }
     }
@@ -334,6 +388,12 @@ export class RoomManager {
     enemy.isRoomEnemy = Boolean(options.isRoomEnemy);
     enemy.spawnRoomId = options.roomId ?? room?.id ?? GameState.currentRoomId;
     enemy.spawnEnemyId = options.enemyId ?? null;
+    if (enemy.isRoomEnemy && enemy.spawnRoomId && enemy.spawnEnemyId) {
+      const persistedHealth = GameState.getRoomEnemyHealth(enemy.spawnRoomId, enemy.spawnEnemyId);
+      if (persistedHealth !== null && Number.isFinite(persistedHealth)) {
+        enemy.health = Phaser.Math.Clamp(persistedHealth, 0, enemy.health);
+      }
+    }
     this.enemies.add(enemy);
     return enemy;
   }
@@ -394,6 +454,8 @@ export class RoomManager {
   }
 
   clearRoom() {
+    this.ceilingTiltTween?.stop();
+    this.ceilingTiltTween = null;
     this.backgroundLayer1?.destroy();
     this.backgroundLayer2?.destroy();
     this.ceilingLayer?.destroy();
@@ -438,7 +500,7 @@ export class RoomManager {
 
     this.treasureChests?.children.iterate((chest) => {
       if (!chest?.active) return;
-      chest.setDepth(this.depthForY(chest.y));
+      chest.setDepth(this.depthForY(chest.y, CHEST_DEPTH_OFFSET));
     });
 
     if (this.player?.active) {
@@ -459,6 +521,7 @@ export class RoomManager {
       if (enemy.blueTrailEmitter?.active) {
         enemy.blueTrailEmitter.setDepth(enemyDepth - 3);
       }
+      enemy.syncAuraDepth?.(enemyDepth);
     });
   }
 
@@ -468,6 +531,25 @@ export class RoomManager {
     if (kind === "ritual") return !GameState.slice.completed;
     if (kind === "exit") return GameState.slice.exitSpawned && !GameState.slice.completed;
     return true;
+  }
+
+  startCeilingAmbientMotion() {
+    if (!this.ceilingLayer) return;
+    const baseX = ROOM_DIMENSIONS.width * 0.5;
+    const baseY = 0;
+    this.ceilingLayer.setPosition(baseX, baseY);
+    this.ceilingLayer.setAngle(-BG_CEILING_TILT_DEGREES);
+
+    this.ceilingTiltTween?.stop();
+
+    this.ceilingTiltTween = this.scene.tweens.add({
+      targets: this.ceilingLayer,
+      angle: BG_CEILING_TILT_DEGREES,
+      duration: BG_CEILING_TILT_MS,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1
+    });
   }
 
   spawnRelicDrop(x, y) {
@@ -502,6 +584,34 @@ export class RoomManager {
     GameState.slice.relicDropX = x;
     GameState.slice.relicDropY = y;
     return trigger;
+  }
+
+  shouldSpawnMissionChest(roomId) {
+    return (
+      roomId === MISSION_CHEST_ROOM_ID &&
+      GameState.slice.hasRelic &&
+      !GameState.slice.completed &&
+      !GameState.isRoomChestOpened(MISSION_CHEST_ROOM_ID, MISSION_CHEST_ID)
+    );
+  }
+
+  spawnMissionChest(room) {
+    const groundPlatform = room?.platforms?.[0];
+    const chestX = Math.round(groundPlatform?.x ?? ROOM_DIMENSIONS.width * 0.5);
+    const groundTopY = groundPlatform
+      ? groundPlatform.y - groundPlatform.height * 0.5
+      : ROOM_DIMENSIONS.height * 0.5;
+    const chestY = Math.round(groundTopY + MISSION_CHEST_SINK_Y);
+    const chest = this.treasureChests.create(chestX, chestY, MISSION_CHEST_TEXTURE_KEY);
+    chest.setOrigin(0.5, MISSION_CHEST_ORIGIN_Y);
+    chest.setDepth(650);
+    chest.setScale(MISSION_CHEST_SCALE);
+    chest.spawnRoomId = MISSION_CHEST_ROOM_ID;
+    chest.spawnChestId = MISSION_CHEST_ID;
+    chest.requiresRelic = true;
+    chest.isMissionChest = true;
+    chest.refreshBody();
+    return chest;
   }
 
   spawnExitPortalAt(x, y) {
@@ -573,7 +683,24 @@ export class RoomManager {
 
   breakChest(chest) {
     if (!chest?.active) return false;
+    if (chest.requiresRelic && !GameState.slice.hasRelic) {
+      EventBus.emit("world-hint", "An ancient lock rejects you. Bring the relic.");
+      return false;
+    }
     chest.disableBody(true, true);
+    GameState.markRoomChestOpened(chest.spawnRoomId ?? GameState.currentRoomId, chest.spawnChestId ?? ROOM_CHEST_ID);
+    this.scene.sound.play(CHEST_OPEN_SFX_KEY, { volume: CHEST_OPEN_SFX_VOLUME });
+    if (chest.isMissionChest) {
+      GameState.slice.completed = true;
+      EventBus.emit("chest-opened");
+      EventBus.emit("slice-finished", {
+        roomId: GameState.currentRoomId,
+        triggerId: "mission-1-chest"
+      });
+      EventBus.emit("world-hint", "The relic unlocks the huge chest. Mission 1 complete.");
+      this.scene.cameras.main.shake(120, 0.0032);
+      return true;
+    }
     GameState.coins += CHEST_COIN_REWARD;
     EventBus.emit("coins-updated", GameState.coins);
     EventBus.emit("chest-opened");
@@ -854,26 +981,65 @@ export class RoomManager {
     if (!room?.exits) return;
 
     if (room.exits.left) {
-      const leftGate = this.scene.add.image(ROOM_GATE_MARGIN_X, ROOM_DIMENSIONS.height - ROOM_GATE_MARGIN_Y, "room-gate");
-      leftGate.setOrigin(0, 1);
-      leftGate.setDisplaySize(ROOM_GATE_WIDTH, ROOM_GATE_HEIGHT);
-      leftGate.setFlipX(true);
-      leftGate.setDepth(ROOM_GATE_DEPTH);
-      leftGate.setAlpha(0.92);
-      this.gateVisuals.add(leftGate);
+      this.spawnAnimatedRoomGate(ROOM_GATE_MARGIN_X, ROOM_DIMENSIONS.height - ROOM_GATE_MARGIN_Y, {
+        originX: 0,
+        flipX: true
+      });
     }
 
     if (room.exits.right) {
-      const rightGate = this.scene.add.image(
+      this.spawnAnimatedRoomGate(
         ROOM_DIMENSIONS.width - ROOM_GATE_MARGIN_X,
         ROOM_DIMENSIONS.height - ROOM_GATE_MARGIN_Y,
-        "room-gate"
+        {
+          originX: 1,
+          flipX: false
+        }
       );
-      rightGate.setOrigin(1, 1);
-      rightGate.setDisplaySize(ROOM_GATE_WIDTH, ROOM_GATE_HEIGHT);
-      rightGate.setDepth(ROOM_GATE_DEPTH);
-      rightGate.setAlpha(0.92);
-      this.gateVisuals.add(rightGate);
     }
+  }
+
+  spawnAnimatedRoomGate(x, y, options = {}) {
+    const originX = options.originX ?? 0.5;
+    const flipX = Boolean(options.flipX);
+    const gateCenterX = x + (0.5 - originX) * ROOM_GATE_WIDTH;
+    const gateCenterY = y - ROOM_GATE_HEIGHT * 0.5;
+    const base = this.scene.add.image(x, y, "room-gate");
+    base.setOrigin(originX, 1);
+    base.setDisplaySize(ROOM_GATE_WIDTH, ROOM_GATE_HEIGHT);
+    base.setFlipX(flipX);
+    base.setDepth(ROOM_GATE_DEPTH);
+    base.setAlpha(ROOM_GATE_ALPHA);
+    this.gateVisuals.add(base);
+
+    const portalCenterX = x + (ROOM_GATE_PORTAL_CENTER_X_RATIO - originX) * ROOM_GATE_WIDTH;
+    const portalCenterY = y - (1 - ROOM_GATE_PORTAL_CENTER_Y_RATIO) * ROOM_GATE_HEIGHT;
+    const portalMaskW = ROOM_GATE_WIDTH * ROOM_GATE_PORTAL_MASK_WIDTH_RATIO;
+    const portalMaskH = ROOM_GATE_HEIGHT * ROOM_GATE_PORTAL_MASK_HEIGHT_RATIO;
+
+    const portalMaskShape = this.scene.add.graphics();
+    portalMaskShape.fillStyle(0xffffff, 1);
+    portalMaskShape.fillEllipse(portalCenterX, portalCenterY, portalMaskW, portalMaskH);
+    portalMaskShape.setVisible(false);
+    this.gateVisuals.add(portalMaskShape);
+    const portalMask = portalMaskShape.createGeometryMask();
+
+    const vortexFast = this.scene.add.image(gateCenterX, gateCenterY, "room-gate");
+    vortexFast.setOrigin(0.5, 0.5);
+    vortexFast.setDisplaySize(ROOM_GATE_WIDTH, ROOM_GATE_HEIGHT);
+    vortexFast.setFlipX(false);
+    vortexFast.setDepth(ROOM_GATE_DEPTH + 1);
+    vortexFast.setBlendMode("ADD");
+    vortexFast.setAlpha(ROOM_GATE_VORTEX_ALPHA);
+    vortexFast.setMask(portalMask);
+    this.gateVisuals.add(vortexFast);
+
+    this.scene.tweens.add({
+      targets: vortexFast,
+      angle: 360,
+      duration: ROOM_GATE_VORTEX_ROTATE_MS_FAST,
+      ease: "Linear",
+      repeat: -1
+    });
   }
 }

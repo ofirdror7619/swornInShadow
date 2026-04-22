@@ -15,7 +15,7 @@ const DEALS = [
   {
     id: "ember_surge",
     title: "Ember Surge",
-    description: "Flame aura damage +50% for 15s",
+    description: "Fire Storm damage +50% for 15s",
     corruptionCost: 10,
     durationMs: 15000,
     effect: "aura_damage_boost"
@@ -85,7 +85,7 @@ const CHOICES = {
     left: {
       id: "embrace",
       label: "Accept Blood",
-      description: "Restore 28 vital and boost aura. +12 corruption.",
+      description: "Restore 28 vital and empower Fire Storm. +12 corruption.",
       corruptionDelta: 12,
       effect: "embrace_low_health"
     },
@@ -226,6 +226,20 @@ export class DemonAgent {
     };
   }
 
+  shiftCorruption(amount = 0, now = 0, options = {}) {
+    if (!Number.isFinite(amount) || amount === 0) return this.getState();
+    this.addCorruption(amount);
+    if (options?.forceWhisper) {
+      this.maybeWhisper("offer_power", now, { force: true });
+    }
+    this.emitState();
+    return this.getState();
+  }
+
+  hasPendingInteraction() {
+    return Boolean(this.pendingOffer || this.pendingChoice);
+  }
+
   offerDeal(reason, now) {
     if (this.narrationLocked) return;
     if (this.pendingOffer) return;
@@ -328,7 +342,10 @@ export class DemonAgent {
     const line = this.pickLine(event, opts);
     if (!line) return;
     this.lastWhisperAt = now;
-    this.onWhisper?.(line);
+    this.onWhisper?.({
+      text: line,
+      event
+    });
   }
 
   pickLine(event) {

@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { EventBus } from "../core/EventBus";
 import { GameState } from "../core/GameState";
-import { HungerVoice } from "../systems/HungerVoice";
+import { WhisperVoice } from "../systems/WhisperVoice";
 import { ABILITY_IDS } from "../data/abilities";
 
 const HUD_Z = 2000;
@@ -17,28 +17,31 @@ const COIN_ORB_X = 668;
 const COIN_ORB_Y = 58;
 const COIN_ORB_R = 23;
 const COIN_BAR_X = 703;
-const COIN_BAR_Y = 44;
+const COIN_BAR_Y = 48;
 const COIN_BAR_W = 220;
-const COIN_BAR_H = 28;
+const COIN_BAR_H = 20;
 
 const AURA_ORB_X = 358;
 const AURA_ORB_Y = 58;
 const AURA_ORB_R = 22;
 const AURA_BAR_X = 392;
-const AURA_BAR_Y = 49;
+const AURA_BAR_Y = 48;
 const AURA_BAR_W = 220;
-const AURA_BAR_H = 18;
+const AURA_BAR_H = 20;
+const FIRE_STORM_LABEL = "FIRE STORM";
+const RESOURCE_LABEL_Y = 24;
+const RESOURCE_LABEL_FONT_SIZE = "18px";
 const CORRUPTION_BAR_X = 286;
 const CORRUPTION_BAR_Y = 14;
 const CORRUPTION_BAR_W = 388;
 const CORRUPTION_BAR_H = 12;
 
-const HUD_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
-const HUD_ACCENT_FONT = "'Cinzel', 'Palatino Linotype', 'Book Antiqua', serif";
+const HUD_FONT = "'PICKYSIDE', serif";
+const HUD_ACCENT_FONT = "'PICKYSIDE', serif";
 const WHISPER_SENTENCE_BREAK_MS = 1000;
 const WHISPER_FADE_OUT_MS = 220;
 const MAP_X = 12;
-const MAP_Y = 34;
+const MAP_Y = 116;
 const MAP_ROOM_W = 18;
 const MAP_ROOM_H = 14;
 const MAP_ROOM_GAP = 13;
@@ -46,7 +49,8 @@ const MAP_ROOM_GAP = 13;
 const ROOM_LABELS = {
   start: "A",
   shaft: "B",
-  crypt: "C"
+  crypt: "C",
+  sanctum: "D"
 };
 
 export class UIScene extends Phaser.Scene {
@@ -67,13 +71,18 @@ export class UIScene extends Phaser.Scene {
     this.whisperQueue = [];
     this.overlayTargetAlpha = 0;
     this.overlayPulse = 0;
-    this.hungerVoice = null;
+    this.whisperVoice = null;
+    this.askWhisperAvailable = false;
+    this.askWhisperCooldownMs = 0;
+    this.askWhisperLabel = "ASK THE WHISPER";
+    this.activeDirectiveOffer = null;
+    this.activeDirectiveState = null;
     this.handleGateBlocked = (payload) => {
       const ability = this.formatAbilityLabel(payload?.requiredAbility);
       this.showHint(`Path sealed. Need ${ability}.`);
     };
     this.handleDemonStateUpdated = (state) => this.onDemonStateUpdated(state);
-    this.handleDemonWhisper = (text) => this.showWhisper(text);
+    this.handleDemonWhisper = (payload) => this.showWhisper(payload);
     this.handleDemonOffer = (deal) => this.showDeal(deal);
     this.handleSliceObjectiveUpdated = (payload) => this.onSliceObjectiveUpdated(payload);
     this.handleSliceObjectivesUpdated = (payload) => this.onSliceObjectivesUpdated(payload);
@@ -82,6 +91,13 @@ export class UIScene extends Phaser.Scene {
     this.handleGameplayLoopUpdated = (payload) => this.onGameplayLoopUpdated(payload);
     this.handleAbilityUnlocked = (ability) => this.onAbilityUnlocked(ability);
     this.handleWhisperChoice = (choice) => this.showWhisperChoice(choice);
+    this.handleWhisperAskAvailability = (payload) => this.onWhisperAskAvailability(payload);
+    this.handleWhisperDirectiveOffered = (payload) => this.showWhisperDirectiveOffer(payload);
+    this.handleWhisperDirectiveActive = (payload) => this.onWhisperDirectiveActive(payload);
+    this.handleWhisperDirectiveCleared = () => this.clearWhisperDirectiveUi();
+    this.handlePlayerDiedHud = (payload) => this.showDeathWindow(payload);
+    this.deathAwaitingConfirm = false;
+    this.modalPausedGame = false;
     this.killCombo = 0;
     this.threatTier = 1;
     this.nextAmbushMs = 0;
@@ -96,7 +112,7 @@ export class UIScene extends Phaser.Scene {
     this.createHintLayer();
     this.createSliceLayer();
     this.createDemonLayer();
-    this.hungerVoice = new HungerVoice();
+    this.whisperVoice = new WhisperVoice();
 
     EventBus.on("room-changed", this.refresh, this);
     EventBus.on("room-changed", this.handleRoomChangedLabel, this);
@@ -114,6 +130,11 @@ export class UIScene extends Phaser.Scene {
     EventBus.on("gameplay-loop-updated", this.handleGameplayLoopUpdated, this);
     EventBus.on("ability-unlocked", this.handleAbilityUnlocked, this);
     EventBus.on("demon-choice-offered", this.handleWhisperChoice, this);
+    EventBus.on("whisper-ask-availability", this.handleWhisperAskAvailability, this);
+    EventBus.on("whisper-directive-offered", this.handleWhisperDirectiveOffered, this);
+    EventBus.on("whisper-directive-active", this.handleWhisperDirectiveActive, this);
+    EventBus.on("whisper-directive-cleared", this.handleWhisperDirectiveCleared, this);
+    EventBus.on("player-died", this.handlePlayerDiedHud, this);
     this.events.on("shutdown", this.cleanup, this);
 
     this.refresh();
@@ -164,9 +185,9 @@ export class UIScene extends Phaser.Scene {
     this.healthFill = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 3);
     this.healthGloss = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 4);
     this.healthLabel = this.add
-      .text(HEALTH_BAR_X + 10, HEALTH_BAR_Y - 16, "VITAL", {
+      .text(HEALTH_BAR_X + 10, RESOURCE_LABEL_Y, "VITAL", {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: RESOURCE_LABEL_FONT_SIZE,
         color: "#f3b26f",
         letterSpacing: 1.2
       })
@@ -178,7 +199,7 @@ export class UIScene extends Phaser.Scene {
     this.healthValue = this.add
       .text(HEALTH_BAR_X + 10, HEALTH_BAR_Y + HEALTH_BAR_H * 0.5, "100 / 100", {
         fontFamily: HUD_ACCENT_FONT,
-        fontSize: "22px",
+        fontSize: "24px",
         color: "#ffd88e",
         stroke: "#3e1f12",
         strokeThickness: 1
@@ -224,9 +245,9 @@ export class UIScene extends Phaser.Scene {
   createCoinLayer() {
     this.coinOrbBack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 1);
     this.coinLabel = this.add
-      .text(COIN_BAR_X + 12, COIN_BAR_Y - 16, "TREASURE", {
+      .text(COIN_BAR_X + 12, RESOURCE_LABEL_Y, "TREASURE", {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: RESOURCE_LABEL_FONT_SIZE,
         color: "#f2bf72",
         letterSpacing: 1.1
       })
@@ -245,7 +266,7 @@ export class UIScene extends Phaser.Scene {
     this.coinsText = this.add
       .text(COIN_BAR_X + 12, COIN_BAR_Y + COIN_BAR_H * 0.5, "0", {
         fontFamily: HUD_ACCENT_FONT,
-        fontSize: "22px",
+        fontSize: "24px",
         color: "#ffcf73",
         stroke: "#4e2f13",
         strokeThickness: 1
@@ -264,8 +285,8 @@ export class UIScene extends Phaser.Scene {
     this.auraGloss = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 4);
     this.auraOrbBack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 1);
     this.auraGlyph = this.add
-      .image(AURA_ORB_X, AURA_ORB_Y + 1, "fx-sword")
-      .setScale(0.92)
+      .image(AURA_ORB_X, AURA_ORB_Y + 2, "fx-flame")
+      .setScale(1.02)
       .setTint(0xffbf73)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 5);
@@ -284,23 +305,23 @@ export class UIScene extends Phaser.Scene {
     this.auraStateText.setShadow(0, 1, "#1e120c", 2, true, true);
 
     this.auraSubText = this.add
-      .text(AURA_BAR_X + 8, AURA_BAR_Y - 14, "AURA", {
+      .text(AURA_BAR_X + 8, RESOURCE_LABEL_Y, FIRE_STORM_LABEL, {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: RESOURCE_LABEL_FONT_SIZE,
         color: "#f1b875",
         letterSpacing: 1.1
       })
       .setScrollFactor(0)
       .setDepth(HUD_Z + 5)
       .setResolution(2);
-    this.auraSubText.setLetterSpacing(1.8);
+    this.auraSubText.setLetterSpacing(1.2);
   }
 
   createHintLayer() {
     this.hintText = this.add
       .text(this.scale.width * 0.5, this.scale.height - 32, "", {
         fontFamily: HUD_FONT,
-        fontSize: "14px",
+        fontSize: "28px",
         color: "#ffe4b7",
         backgroundColor: "#190f0ccc",
         stroke: "#6f4124",
@@ -316,7 +337,7 @@ export class UIScene extends Phaser.Scene {
     this.abilityUnlockText = this.add
       .text(this.scale.width * 0.5, this.scale.height * 0.34, "", {
         fontFamily: HUD_FONT,
-        fontSize: "26px",
+        fontSize: "46px",
         color: "#ffd7a1",
         stroke: "#2d160f",
         strokeThickness: 4,
@@ -329,14 +350,78 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2)
       .setAlpha(0)
       .setVisible(false);
+
+    this.deathBackdrop = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x040000)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 40);
+    this.deathPanel = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 640, 220, 0x0a0000)
+      .setStrokeStyle(2, 0x8f1414, 0.95)
+      .setAlpha(0)
+      .setScale(0.94)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 41);
+    this.deathTitle = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 38, "THE ABYSS\nHAS CLAIMED YOU", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "22px",
+        color: "#de3d3d",
+        stroke: "#1a0000",
+        strokeThickness: 3,
+        align: "center",
+        lineSpacing: 4,
+        wordWrap: { width: 560 }
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.deathTitle.setShadow(0, 3, "#220000", 12, true, true);
+    this.deathSubtext = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 24, "Rise again where blood was spilled.", {
+        fontFamily: HUD_FONT,
+        fontSize: "16px",
+        color: "#e6b8b8",
+        stroke: "#160000",
+        strokeThickness: 2,
+        align: "center"
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.deathConfirmText = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 64, "Press Enter to rise.", {
+        fontFamily: HUD_FONT,
+        fontSize: "14px",
+        color: "#f2d0d0",
+        stroke: "#140000",
+        strokeThickness: 2,
+        align: "center"
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.deathConfirmKey = this.input.keyboard.addKey("ENTER");
   }
 
   createSliceLayer() {
     this.minimapGraphics = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 13);
     this.minimapLabel = this.add
-      .text(MAP_X, MAP_Y - 14, "WORLD  A-B-C", {
+      .text(12, 92, "ROOM: A B C D", {
         fontFamily: HUD_FONT,
-        fontSize: "10px",
+        fontSize: "14px",
         color: "#d7b891"
       })
       .setOrigin(0, 0)
@@ -345,27 +430,14 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2);
     this.minimapLabel.setLetterSpacing(1);
 
-    this.roomNameText = this.add
-      .text(12, 12, "ROOM: START", {
-        fontFamily: HUD_FONT,
-        fontSize: "11px",
-        color: "#e8c8a0",
-        backgroundColor: "#160d0bdd",
-        padding: { x: 8, y: 4 }
-      })
-      .setOrigin(0, 0)
-      .setScrollFactor(0)
-      .setDepth(HUD_Z + 14)
-      .setResolution(2);
-    this.roomNameText.setLetterSpacing(1.2);
-
     this.sliceObjectiveText = this.add
       .text(this.scale.width * 0.5, 104, "Find the gate to the next room.", {
         fontFamily: HUD_ACCENT_FONT,
-        fontSize: "14px",
+        fontSize: "30px",
         color: "#ffe2bf",
         stroke: "#2a1712",
-        strokeThickness: 1
+        strokeThickness: 1,
+        wordWrap: { width: this.scale.width * 0.72 }
       })
       .setOrigin(0.5, 0.5)
       .setScrollFactor(0)
@@ -373,12 +445,13 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2);
 
     this.sliceChecklistText = this.add
-      .text(this.scale.width * 0.5, 124, "[ ] Reach Next Room", {
+      .text(this.scale.width * 0.5, 132, "[ ] Reach Next Room", {
         fontFamily: HUD_FONT,
-        fontSize: "12px",
+        fontSize: "24px",
         color: "#f0cfab",
         stroke: "#2a1712",
-        strokeThickness: 1
+        strokeThickness: 1,
+        wordWrap: { width: this.scale.width * 0.68 }
       })
       .setOrigin(0.5, 0.5)
       .setScrollFactor(0)
@@ -386,9 +459,9 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2);
 
     this.extractPromptText = this.add
-      .text(this.scale.width * 0.5, 143, "Objectives complete. Extract.", {
+      .text(this.scale.width * 0.5, 156, "Objectives complete. Extract.", {
         fontFamily: HUD_ACCENT_FONT,
-        fontSize: "13px",
+        fontSize: "22px",
         color: "#ffd992",
         stroke: "#2a1712",
         strokeThickness: 1
@@ -400,9 +473,9 @@ export class UIScene extends Phaser.Scene {
       .setVisible(false);
 
     this.sliceDangerText = this.add
-      .text(this.scale.width - 12, 16, "DANGER: LOW", {
+      .text(this.scale.width - 12, 10, "DANGER: LOW", {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: "15px",
         color: "#d8b5b0"
       })
       .setOrigin(1, 0)
@@ -412,9 +485,9 @@ export class UIScene extends Phaser.Scene {
     this.sliceDangerText.setLetterSpacing(1.2);
 
     this.sliceComboText = this.add
-      .text(this.scale.width - 12, 34, "COMBO: x0", {
+      .text(this.scale.width - 12, 28, "COMBO: x0", {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: "15px",
         color: "#d9c2a6"
       })
       .setOrigin(1, 0)
@@ -424,9 +497,9 @@ export class UIScene extends Phaser.Scene {
     this.sliceComboText.setLetterSpacing(1.2);
 
     this.sliceThreatText = this.add
-      .text(this.scale.width - 12, 52, "THREAT TIER: 1 | WAVE: --.-s", {
+      .text(this.scale.width - 12, 46, "THREAT TIER: 1 | WAVE: --.-s", {
         fontFamily: HUD_FONT,
-        fontSize: "11px",
+        fontSize: "15px",
         color: "#d9c2a6"
       })
       .setOrigin(1, 0)
@@ -442,7 +515,7 @@ export class UIScene extends Phaser.Scene {
     this.corruptionLabel = this.add
       .text(CORRUPTION_BAR_X, CORRUPTION_BAR_Y - 14, "THE WHISPER", {
         fontFamily: HUD_FONT,
-        fontSize: "10px",
+        fontSize: "20px",
         color: "#d8a0a0"
       })
       .setScrollFactor(0)
@@ -451,12 +524,14 @@ export class UIScene extends Phaser.Scene {
 
     this.whisperText = this.add
       .text(this.scale.width * 0.5, this.scale.height - 74, "", {
-        fontFamily: "'Georgia', serif",
-        fontSize: "22px",
+        fontFamily: "'Simbiot', serif",
+        fontSize: "20px",
         color: "#e5c9c9",
         stroke: "#170b0b",
-        strokeThickness: 3,
-        align: "center"
+        strokeThickness: 2,
+        align: "center",
+        lineSpacing: 8,
+        wordWrap: { width: this.scale.width * 0.78 }
       })
       .setOrigin(0.5)
       .setAlpha(0)
@@ -472,50 +547,74 @@ export class UIScene extends Phaser.Scene {
 
     this.dealBackdrop = this.add
       .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x000000)
-      .setAlpha(0.42)
+      .setAlpha(0.18)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 30);
+    this.dealPanelGlow = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 600, 240, 0x2d0911)
+      .setAlpha(0.2)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 31)
+      .setBlendMode("ADD");
     this.dealPanel = this.add
-      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 560, 210, 0x140b0a)
-      .setStrokeStyle(2, 0x874a42, 0.95)
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 580, 230, 0x080407)
+      .setAlpha(0.72)
+      .setStrokeStyle(2, 0x6f2d39, 0.95)
       .setVisible(false)
       .setScrollFactor(0)
-      .setDepth(HUD_Z + 31);
+      .setDepth(HUD_Z + 32);
+    this.dealPanelInner = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 556, 202, 0x11060d)
+      .setAlpha(0.55)
+      .setStrokeStyle(1, 0x2b1118, 0.95)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 33);
     this.dealTitle = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 68, "", {
-        fontFamily: HUD_FONT,
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 62, "", {
+        fontFamily: "'Simbiot', serif",
         fontSize: "22px",
-        color: "#f5c8c8"
+        color: "#f8c7d3",
+        align: "center",
+        wordWrap: { width: 520 }
       })
       .setOrigin(0.5)
       .setVisible(false)
       .setScrollFactor(0)
-      .setDepth(HUD_Z + 32)
+      .setDepth(HUD_Z + 34)
       .setResolution(2);
+    this.dealTitle.setShadow(0, 2, "#1b090d", 8, true, true);
+    this.dealTitle.setLetterSpacing(0.5);
     this.dealDesc = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 26, "", {
-        fontFamily: HUD_ACCENT_FONT,
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 4, "", {
+        fontFamily: "'Simbiot', serif",
         fontSize: "17px",
-        color: "#f2d8d8",
-        align: "center"
+        color: "#eed5db",
+        align: "center",
+        wordWrap: { width: 510 },
+        lineSpacing: 4
       })
       .setOrigin(0.5)
       .setVisible(false)
       .setScrollFactor(0)
-      .setDepth(HUD_Z + 32)
+      .setDepth(HUD_Z + 34)
       .setResolution(2);
+    this.dealDesc.setShadow(0, 1, "#14070b", 5, true, true);
     this.dealActions = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 52, "[E] Accept   [R] Refuse", {
-        fontFamily: HUD_ACCENT_FONT,
-        fontSize: "16px",
-        color: "#f0a5a5"
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 70, "[E] EMBRACE    [R] REFUSE", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "18px",
+        color: "#ff9fae"
       })
       .setOrigin(0.5)
       .setVisible(false)
       .setScrollFactor(0)
-      .setDepth(HUD_Z + 32)
+      .setDepth(HUD_Z + 35)
       .setResolution(2);
+    this.dealActions.setShadow(0, 1, "#1c090f", 4, true, true);
+    this.dealActions.setLetterSpacing(1.1);
 
     this.offerKeys = this.input.keyboard.addKeys({
       accept: "E",
@@ -528,71 +627,124 @@ export class UIScene extends Phaser.Scene {
       numTwo: "NUMPAD_TWO"
     });
     this.ttsToggleKey = this.input.keyboard.addKey("V");
+    this.askWhisperKey = this.input.keyboard.addKey("Q");
 
     this.whisperHudVisible = Boolean(GameState.whisperAwakened || GameState.whisperIntroComplete);
     this.setWhisperHudVisible(this.whisperHudVisible, false);
 
     this.choiceBackdrop = this.add
       .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x030202)
-      .setAlpha(0.45)
+      .setAlpha(0.22)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 34);
     this.choicePanel = this.add
-      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 700, 278, 0x180908)
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 640, 420, 0x130708)
       .setStrokeStyle(2, 0xba6d57, 0.96)
+      .setAlpha(0.82)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 35);
     this.choiceTitle = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 100, "", {
-        fontFamily: HUD_FONT,
-        fontSize: "24px",
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 186, "", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "20px",
         color: "#ffd6a8"
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, 0)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 36)
       .setResolution(2);
     this.choicePrompt = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 56, "", {
-        fontFamily: HUD_ACCENT_FONT,
-        fontSize: "17px",
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 142, "", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "15px",
         color: "#f5dfca",
         align: "center",
-        wordWrap: { width: 640 }
+        wordWrap: { width: 580 },
+        lineSpacing: 6
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, 0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 36)
+      .setResolution(2);
+    this.choiceDetails = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 46, "", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "15px",
+        color: "#efd9c3",
+        align: "center",
+        wordWrap: { width: 580 },
+        lineSpacing: 4
+      })
+      .setOrigin(0.5, 0)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 36)
       .setResolution(2);
     this.choiceLeftText = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 10, "", {
-        fontFamily: HUD_ACCENT_FONT,
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 72, "", {
+        fontFamily: "'Simbiot', serif",
         fontSize: "16px",
         color: "#ffbe9d",
         align: "center",
-        wordWrap: { width: 640 }
+        wordWrap: { width: 580 },
+        lineSpacing: 3
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, 0)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 36)
       .setResolution(2);
     this.choiceRightText = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 58, "", {
-        fontFamily: HUD_ACCENT_FONT,
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 146, "", {
+        fontFamily: "'Simbiot', serif",
         fontSize: "16px",
         color: "#cfdcb0",
         align: "center",
-        wordWrap: { width: 640 }
+        wordWrap: { width: 580 },
+        lineSpacing: 3
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, 0)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 36)
+      .setResolution(2);
+
+    this.askWhisperText = this.add
+      .text(this.scale.width - 16, this.scale.height - 8, "[Q] ASK THE WHISPER", {
+        fontFamily: HUD_FONT,
+        fontSize: "26px",
+        color: "#f4c0b6",
+        backgroundColor: "#1a0b0bcc",
+        padding: { x: 10, y: 5 }
+      })
+      .setOrigin(1, 1)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 24)
+      .setResolution(2)
+      .setInteractive({ useHandCursor: true });
+    this.askWhisperText.on("pointerdown", () => this.requestWhisperDirective());
+
+    this.directiveStatusText = this.add
+      .text(12, this.scale.height - 4, "", {
+        fontFamily: HUD_ACCENT_FONT,
+        fontSize: "10px",
+        color: "#ffc6b8",
+        stroke: "#180909",
+        strokeThickness: 1,
+        backgroundColor: "#120808d9",
+        padding: { x: 7, y: 4 },
+        align: "left"
+      })
+      .setOrigin(0, 1)
+      .setWordWrapWidth(300, true)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 22)
       .setResolution(2);
   }
 
@@ -620,39 +772,46 @@ export class UIScene extends Phaser.Scene {
 
     const slice = GameState.slice ?? {};
     const currentRoomId = GameState.currentRoomId ?? "start";
-    const inCombatHall = currentRoomId === "shaft";
     const inReliquary = currentRoomId === "crypt";
-    const shaftAngelDone = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
+    const inSanctum = currentRoomId === "sanctum";
+    const seraphSlain = Boolean(
+      GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") || slice.relicDropped || slice.hasRelic
+    );
+    const cryptAngelKillCount = [
+      "crypt-angel-1",
+      "crypt-angel-2",
+      "crypt-angel-3"
+    ].filter((enemyId) => GameState.isRoomEnemyDefeated("crypt", enemyId)).length;
     if (slice.completed) {
-      this.onSliceObjectiveUpdated({ objective: "The reliquary opened. Press forward." });
+      this.onSliceObjectiveUpdated({ objective: "Mission 1 complete. Push deeper into the world." });
+    } else if (inSanctum && !seraphSlain) {
+      this.onSliceObjectiveUpdated({ objective: "Defeat the Fallen Seraph in the sanctum." });
     } else if (!slice.hasRelic) {
       this.onSliceObjectiveUpdated({
-        objective: inReliquary
-          ? slice.relicDropped
-            ? "Claim the Flame Relic in Sealed Reliquary."
-            : "Defeat all 3 angels in Sealed Reliquary."
-          : inCombatHall
-            ? "Slay the angel in Combat Hall, then move to Sealed Reliquary."
+        objective: inReliquary && !slice.relicDropped
+          ? "Defeat all 3 angels in Sealed Reliquary."
+          : slice.relicDropped
+            ? "Claim the relic dropped by the Fallen Seraph."
             : "Find the gate to the next room."
       });
     } else {
       this.onSliceObjectiveUpdated({
-        objective: "Return to Sealed Reliquary and cross the fire gate."
+        objective: "Return to Room C and open the huge chest with the relic."
       });
     }
-    const killAngelDone = Boolean(slice.relicAngelSlain || slice.relicDropped || slice.hasRelic);
+    const killAngelDone = seraphSlain;
     const findRelicDone = Boolean(slice.hasRelic);
     this.onSliceObjectivesUpdated({
       killAngelDone,
       findRelicDone,
       extractionReady: Boolean(GameState.hasAbility(ABILITY_IDS.FLAME_RING)),
-      checklistText: inReliquary
-        ? slice.relicDropped
-          ? "[x] Defeat 3 Angels   [ ] Claim Relic"
-          : "[ ] Defeat 3 Angels"
-        : inCombatHall
-          ? `${shaftAngelDone ? "[x]" : "[ ]"} Defeat Angel`
-          : "[ ] Reach Next Room"
+      checklistText: slice.hasRelic
+        ? "[V] Claim Relic   [ ] Open Huge Chest (Room C)"
+        : inReliquary && !slice.relicDropped
+          ? `${cryptAngelKillCount >= 3 ? "[V]" : "[ ]"} Defeat 3 Angels (${cryptAngelKillCount}/3)`
+          : slice.relicDropped
+            ? "[V] Slay Fallen Seraph   [ ] Claim Relic"
+            : "[ ] Reach Next Room"
     });
     this.updateMiniMap(GameState.currentRoomId);
   }
@@ -675,7 +834,7 @@ export class UIScene extends Phaser.Scene {
       this.auraGlyph.setTint(0xb98556);
     } else {
       this.auraStateText.setText("READY");
-      this.auraStateText.setColor("#f6c17a");
+      this.auraStateText.setColor("#1a120c");
       this.auraGlyph.setTint(0xffc27a);
     }
   }
@@ -803,10 +962,61 @@ export class UIScene extends Phaser.Scene {
     });
   }
 
+  showDeathWindow() {
+    if (!this.deathBackdrop || !this.deathPanel || !this.deathTitle || !this.deathSubtext) return;
+    this.tweens.killTweensOf([this.deathBackdrop, this.deathPanel, this.deathTitle, this.deathSubtext, this.deathConfirmText]);
+    this.deathAwaitingConfirm = true;
+
+    this.deathBackdrop.setVisible(true).setAlpha(0);
+    this.deathPanel.setVisible(true).setAlpha(0).setScale(0.94);
+    this.deathTitle.setVisible(true).setAlpha(0).setScale(0.95);
+    this.deathSubtext.setVisible(true).setAlpha(0);
+    this.deathConfirmText?.setVisible(true).setAlpha(0);
+
+    this.tweens.add({
+      targets: this.deathBackdrop,
+      alpha: 0.6,
+      duration: 170,
+      ease: "Quad.easeOut"
+    });
+    this.tweens.add({
+      targets: [this.deathPanel, this.deathTitle, this.deathSubtext, this.deathConfirmText],
+      alpha: 1,
+      duration: 220,
+      ease: "Sine.easeOut"
+    });
+    this.tweens.add({
+      targets: [this.deathPanel, this.deathTitle],
+      scale: 1,
+      duration: 260,
+      ease: "Back.easeOut"
+    });
+    this.updateGamePauseState();
+  }
+
+  hideDeathWindow() {
+    if (!this.deathAwaitingConfirm) return;
+    this.deathAwaitingConfirm = false;
+    this.tweens.add({
+      targets: [this.deathBackdrop, this.deathPanel, this.deathTitle, this.deathSubtext, this.deathConfirmText],
+      alpha: 0,
+      duration: 220,
+      ease: "Sine.easeIn",
+      onComplete: () => {
+        this.deathBackdrop?.setVisible(false);
+        this.deathPanel?.setVisible(false);
+        this.deathTitle?.setVisible(false);
+        this.deathSubtext?.setVisible(false);
+        this.deathConfirmText?.setVisible(false);
+      }
+    });
+    this.updateGamePauseState();
+  }
+
   onDemonStateUpdated(state) {
     this.corruption = Phaser.Math.Clamp(state?.corruption ?? 0, 0, 100);
     this.dominance = Phaser.Math.Clamp(state?.dominance ?? 0, 0, 4);
-    this.hungerVoice?.setDominance(this.dominance);
+    this.whisperVoice?.setDominance(this.dominance);
 
     let danger = "LOW";
     let color = "#d8b5b0";
@@ -837,21 +1047,67 @@ export class UIScene extends Phaser.Scene {
     const extractionReady = Boolean(payload?.extractionReady);
     const checklist =
       payload?.checklistText ??
-      `${GameState.currentRoomId !== "start" ? "[x]" : "[ ]"} Reach Next Room`;
+      `${GameState.currentRoomId !== "start" ? "[V]" : "[ ]"} Reach Next Room`;
     this.sliceChecklistText.setText(checklist);
-    this.extractPromptText.setText("Relic active. Return to Room C gate.");
+    this.extractPromptText.setText("Relic active. Open the huge chest in Room C.");
     this.extractPromptText.setVisible(extractionReady && !GameState.slice?.completed);
   }
 
   onRoomChangedLabel(roomId) {
-    const label = ROOM_LABELS[roomId] ?? String(roomId ?? "UNKNOWN").toUpperCase();
-    this.roomNameText?.setText(`ROOM: ${label}`);
     this.updateMiniMap(roomId);
   }
 
   onWhisperAwakened() {
     this.whisperHudVisible = true;
     this.setWhisperHudVisible(true, true);
+  }
+
+  onWhisperAskAvailability(payload) {
+    this.askWhisperAvailable = Boolean(payload?.available);
+    this.askWhisperCooldownMs = Math.max(0, payload?.cooldownLeftMs ?? 0);
+    this.askWhisperLabel = String(payload?.label ?? "ASK THE WHISPER");
+    if (payload?.activeDirective) {
+      this.onWhisperDirectiveActive(payload.activeDirective);
+    }
+  }
+
+  onWhisperDirectiveActive(payload) {
+    this.activeDirectiveState = payload
+      ? {
+          title: payload.title ?? "Directive",
+          objective: payload.objective ?? "",
+          progressText: payload.progressText ?? "",
+          secondsLeft: Math.max(0, payload.secondsLeft ?? 0)
+        }
+      : null;
+    if (!this.directiveStatusText) return;
+    if (!this.activeDirectiveState) {
+      this.directiveStatusText.setVisible(false);
+      return;
+    }
+    const state = this.activeDirectiveState;
+    const compactProgress = String(state.progressText ?? "").slice(0, 22);
+    this.directiveStatusText
+      .setVisible(true)
+      .setText(
+        `DIRECTIVE  ${compactProgress}  ${state.secondsLeft}s`
+      );
+  }
+
+  clearWhisperDirectiveUi() {
+    this.activeDirectiveOffer = null;
+    this.activeDirectiveState = null;
+    this.directiveStatusText?.setVisible(false);
+    if (!this.activeChoice) {
+      this.choiceBackdrop?.setVisible(false);
+      this.choicePanel?.setVisible(false);
+      this.choiceTitle?.setVisible(false);
+      this.choicePrompt?.setVisible(false);
+      this.choiceDetails?.setVisible(false);
+      this.choiceLeftText?.setVisible(false);
+      this.choiceRightText?.setVisible(false);
+    }
+    this.updateGamePauseState();
   }
 
   onGameplayLoopUpdated(payload) {
@@ -901,11 +1157,12 @@ export class UIScene extends Phaser.Scene {
     this.updateMiniMap(GameState.currentRoomId);
   }
 
-  updateMiniMap(roomId = GameState.currentRoomId) {
+  updateMiniMap(roomId = GameState.currentRoomId, timeNow = this.time.now) {
     if (!this.minimapGraphics) return;
-    const rooms = ["start", "shaft", "crypt"];
+    const rooms = ["start", "shaft", "crypt", "sanctum"];
     const activeIndex = Math.max(0, rooms.indexOf(roomId));
     const hasFlameRing = GameState.hasAbility(ABILITY_IDS.FLAME_RING);
+    const blink = 0.58 + (Math.sin(timeNow * 0.012) * 0.5 + 0.5) * 0.37;
 
     this.minimapGraphics.clear();
     this.minimapGraphics.lineStyle(2, 0xb98761, 0.8);
@@ -925,10 +1182,10 @@ export class UIScene extends Phaser.Scene {
       const isCurrent = index === activeIndex;
       const lockedC = roomKey === "crypt" && !hasFlameRing;
       const fillColor = isCurrent ? 0xffca84 : lockedC ? 0x56362a : 0x91715b;
-      const fillAlpha = isCurrent ? 0.95 : lockedC ? 0.55 : 0.78;
+      const fillAlpha = isCurrent ? blink : lockedC ? 0.55 : 0.78;
       this.minimapGraphics.fillStyle(fillColor, fillAlpha);
       this.minimapGraphics.fillRoundedRect(x, y, MAP_ROOM_W, MAP_ROOM_H, 3);
-      this.minimapGraphics.lineStyle(1, isCurrent ? 0xffebbe : 0xdec2a0, isCurrent ? 0.95 : 0.75);
+      this.minimapGraphics.lineStyle(1, isCurrent ? 0xffebbe : 0xdec2a0, isCurrent ? blink : 0.75);
       this.minimapGraphics.strokeRoundedRect(x, y, MAP_ROOM_W, MAP_ROOM_H, 3);
       if (lockedC) {
         this.minimapGraphics.lineStyle(1, 0xff7a4a, 0.9);
@@ -936,6 +1193,11 @@ export class UIScene extends Phaser.Scene {
         this.minimapGraphics.moveTo(x + 4, y + 3);
         this.minimapGraphics.lineTo(x + MAP_ROOM_W - 4, y + MAP_ROOM_H - 3);
         this.minimapGraphics.strokePath();
+      }
+      if (roomKey === "sanctum") {
+        const markerColor = isCurrent ? 0xff4f4f : 0xd63f3f;
+        this.minimapGraphics.fillStyle(markerColor, 0.95);
+        this.minimapGraphics.fillCircle(x + MAP_ROOM_W * 0.5, y + MAP_ROOM_H * 0.5, 2.2);
       }
     });
   }
@@ -948,15 +1210,18 @@ export class UIScene extends Phaser.Scene {
       .join(" ");
   }
 
-  showWhisper(message) {
+  showWhisper(payload) {
+    const message = typeof payload === "string" ? payload : payload?.text;
+    const event = typeof payload === "string" ? "ambient" : payload?.event;
     if (!message) return;
     if (this.whisperActive) {
-      this.whisperQueue.push(message);
+      this.whisperQueue.push({ text: message, event });
       return;
     }
 
     this.whisperText.setText(message);
-    const speech = this.hungerVoice?.speakWhisper(message, {
+    const speech = this.whisperVoice?.speakWhisper(message, {
+      event,
       onEnd: () => this.fadeWhisperOut()
     });
     this.tweens.killTweensOf(this.whisperText);
@@ -981,22 +1246,29 @@ export class UIScene extends Phaser.Scene {
       this.choicePanel?.setVisible(false);
       this.choiceTitle?.setVisible(false);
       this.choicePrompt?.setVisible(false);
+      this.choiceDetails?.setVisible(false);
       this.choiceLeftText?.setVisible(false);
       this.choiceRightText?.setVisible(false);
     }
     this.activeOffer = deal;
     this.dealBackdrop.setVisible(true);
+    this.dealPanelGlow.setVisible(true);
     this.dealPanel.setVisible(true);
-    this.dealTitle.setVisible(true).setText(`The Whisper offers: ${deal.title}`);
+    this.dealPanelInner.setVisible(true);
+    this.dealTitle.setVisible(true).setText(`THE WHISPER OFFERS\n${String(deal.title ?? "").toUpperCase()}`);
+    const corruptionDelta = Number(deal.corruptionCost ?? 0);
+    const corruptionShift = `${corruptionDelta >= 0 ? "+" : ""}${corruptionDelta}`;
     this.dealDesc
       .setVisible(true)
-      .setText(`${deal.description}\nCost: +${deal.corruptionCost} corruption`);
+      .setText(`${deal.description}\nCorruption Shift: ${corruptionShift}`);
     this.dealActions.setVisible(true);
-    this.hungerVoice?.speakOffer(deal);
+    this.whisperVoice?.speakOffer(deal);
+    this.updateGamePauseState();
   }
 
   showWhisperChoice(choice) {
     if (!choice) return;
+    this.activeDirectiveOffer = null;
     if (this.activeOffer) {
       this.resolveDeal("refuse");
     }
@@ -1005,13 +1277,56 @@ export class UIScene extends Phaser.Scene {
     this.choicePanel?.setVisible(true);
     this.choiceTitle?.setVisible(true).setText(`Whisper Choice: ${choice.title}`);
     this.choicePrompt?.setVisible(true).setText(choice.prompt ?? "");
+    this.choiceDetails?.setVisible(false).setText("");
     this.choiceLeftText
       ?.setVisible(true)
       .setText(`[1] ${choice.left?.label ?? "Option One"}\n${choice.left?.description ?? ""}`);
     this.choiceRightText
       ?.setVisible(true)
       .setText(`[2] ${choice.right?.label ?? "Option Two"}\n${choice.right?.description ?? ""}`);
-    this.hungerVoice?.speakWhisper(choice.prompt ?? choice.title);
+    this.whisperVoice?.speakWhisper(choice.prompt ?? choice.title, { event: "offer_power" });
+    this.updateGamePauseState();
+  }
+
+  showWhisperDirectiveOffer(payload) {
+    if (!payload) return;
+    if (this.activeOffer) {
+      this.resolveDeal("refuse");
+    }
+    this.activeChoice = null;
+    this.activeDirectiveOffer = payload;
+    this.choiceBackdrop?.setVisible(true);
+    this.choicePanel?.setVisible(true);
+    this.choiceTitle?.setVisible(true).setText(`The Whisper: ${payload.title ?? "Directive"}`);
+    this.choicePrompt
+      ?.setVisible(true)
+      .setText(payload.prompt ?? "");
+    this.choiceDetails
+      ?.setVisible(true)
+      .setText(
+        `Objective: ${payload.objective ?? ""}\nReward: ${payload.rewardLabel ?? ""}\nCorruption: +${payload.corruptionGain ?? 0}`
+      );
+    this.choiceLeftText?.setVisible(true).setText("[1] OBEY\nAccept directive");
+    this.choiceRightText?.setVisible(true).setText("[2] IGNORE\nRefuse and stay weaker");
+    this.whisperVoice?.speakWhisper(payload.prompt ?? payload.title ?? "Obey.", { event: "offer_power" });
+    this.updateGamePauseState();
+  }
+
+  resolveDirectiveOffer(decision) {
+    if (!this.activeDirectiveOffer) return;
+    EventBus.emit("whisper-directive-response", {
+      decision,
+      directiveId: this.activeDirectiveOffer.id
+    });
+    this.activeDirectiveOffer = null;
+    this.choiceBackdrop?.setVisible(false);
+    this.choicePanel?.setVisible(false);
+    this.choiceTitle?.setVisible(false);
+    this.choicePrompt?.setVisible(false);
+    this.choiceDetails?.setVisible(false);
+    this.choiceLeftText?.setVisible(false);
+    this.choiceRightText?.setVisible(false);
+    this.updateGamePauseState();
   }
 
   resolveDeal(decision) {
@@ -1022,10 +1337,30 @@ export class UIScene extends Phaser.Scene {
     });
     this.activeOffer = null;
     this.dealBackdrop.setVisible(false);
+    this.dealPanelGlow.setVisible(false);
     this.dealPanel.setVisible(false);
+    this.dealPanelInner.setVisible(false);
     this.dealTitle.setVisible(false);
     this.dealDesc.setVisible(false);
     this.dealActions.setVisible(false);
+    this.updateGamePauseState();
+  }
+
+  updateGamePauseState() {
+    const shouldPauseGame = Boolean(
+      this.deathAwaitingConfirm || this.activeOffer || this.activeDirectiveOffer || this.activeChoice
+    );
+    if (shouldPauseGame === this.modalPausedGame) return;
+    this.modalPausedGame = shouldPauseGame;
+    if (shouldPauseGame) {
+      if (this.scene.isActive("game")) {
+        this.scene.pause("game");
+      }
+      return;
+    }
+    if (this.scene.isPaused("game")) {
+      this.scene.resume("game");
+    }
   }
 
   resolveWhisperChoice(decision) {
@@ -1039,8 +1374,10 @@ export class UIScene extends Phaser.Scene {
     this.choicePanel?.setVisible(false);
     this.choiceTitle?.setVisible(false);
     this.choicePrompt?.setVisible(false);
+    this.choiceDetails?.setVisible(false);
     this.choiceLeftText?.setVisible(false);
     this.choiceRightText?.setVisible(false);
+    this.updateGamePauseState();
   }
 
   drawCorruptionBar() {
@@ -1097,6 +1434,35 @@ export class UIScene extends Phaser.Scene {
     return "WHISPER";
   }
 
+  requestWhisperDirective() {
+    if (!this.whisperHudVisible) return;
+    if (this.activeOffer || this.activeChoice || this.activeDirectiveOffer) return;
+    EventBus.emit("whisper-ask-requested");
+  }
+
+  drawAskWhisperButton(timeNow) {
+    if (!this.askWhisperText) return;
+    const blocked = Boolean(this.activeOffer || this.activeChoice || this.activeDirectiveOffer);
+    const shouldShow = this.whisperHudVisible && !blocked;
+    this.askWhisperText.setVisible(shouldShow);
+    if (!shouldShow) return;
+
+    const cooldownSec = Math.max(0, Math.ceil(this.askWhisperCooldownMs / 1000));
+    const label = this.askWhisperAvailable
+      ? `[Q] ${this.askWhisperLabel}`
+      : `[Q] ${this.askWhisperLabel} (${cooldownSec}s)`;
+    this.askWhisperText.setText(label);
+
+    if (this.askWhisperAvailable) {
+      const pulse = 0.64 + Math.sin(timeNow * 0.01) * 0.28;
+      this.askWhisperText.setAlpha(pulse);
+      this.askWhisperText.setColor("#ffd0c6");
+    } else {
+      this.askWhisperText.setAlpha(0.42);
+      this.askWhisperText.setColor("#c89d95");
+    }
+  }
+
   update(_, delta) {
     this.displayHealthPct = Phaser.Math.Linear(this.displayHealthPct, this.healthTargetPct, 0.18);
     if (this.delayedHealthPct < this.displayHealthPct) {
@@ -1110,8 +1476,10 @@ export class UIScene extends Phaser.Scene {
     this.drawHealthOrb(this.time.now);
     this.drawCoinOrb(this.time.now);
     this.drawAuraBar(this.time.now);
+    this.updateMiniMap(GameState.currentRoomId, this.time.now);
     this.drawCorruptionBar();
     this.drawDemonOverlay();
+    this.drawAskWhisperButton(this.time.now);
 
     if (this.activeOffer) {
       if (Phaser.Input.Keyboard.JustDown(this.offerKeys.accept)) {
@@ -1120,7 +1488,19 @@ export class UIScene extends Phaser.Scene {
         this.resolveDeal("refuse");
       }
     }
-    if (this.activeChoice) {
+    if (this.activeDirectiveOffer) {
+      if (
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.one) ||
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.numOne)
+      ) {
+        this.resolveDirectiveOffer("obey");
+      } else if (
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.two) ||
+        Phaser.Input.Keyboard.JustDown(this.choiceKeys.numTwo)
+      ) {
+        this.resolveDirectiveOffer("ignore");
+      }
+    } else if (this.activeChoice) {
       if (
         Phaser.Input.Keyboard.JustDown(this.choiceKeys.one) ||
         Phaser.Input.Keyboard.JustDown(this.choiceKeys.numOne)
@@ -1135,7 +1515,13 @@ export class UIScene extends Phaser.Scene {
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.ttsToggleKey)) {
-      this.hungerVoice?.toggle();
+      this.whisperVoice?.toggle();
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.askWhisperKey) && this.askWhisperAvailable) {
+      this.requestWhisperDirective();
+    }
+    if (this.deathAwaitingConfirm && Phaser.Input.Keyboard.JustDown(this.deathConfirmKey)) {
+      this.hideDeathWindow();
     }
   }
 
@@ -1156,10 +1542,19 @@ export class UIScene extends Phaser.Scene {
     EventBus.off("gameplay-loop-updated", this.handleGameplayLoopUpdated, this);
     EventBus.off("ability-unlocked", this.handleAbilityUnlocked, this);
     EventBus.off("demon-choice-offered", this.handleWhisperChoice, this);
-    this.hungerVoice?.destroy();
-    this.hungerVoice = null;
+    EventBus.off("whisper-ask-availability", this.handleWhisperAskAvailability, this);
+    EventBus.off("whisper-directive-offered", this.handleWhisperDirectiveOffered, this);
+    EventBus.off("whisper-directive-active", this.handleWhisperDirectiveActive, this);
+    EventBus.off("whisper-directive-cleared", this.handleWhisperDirectiveCleared, this);
+    EventBus.off("player-died", this.handlePlayerDiedHud, this);
+    this.whisperVoice?.destroy();
+    this.whisperVoice = null;
     this.healthFlame?.destroy();
     this.healthFlameMaskGraphics?.destroy();
+    if (this.modalPausedGame && this.scene.isPaused("game")) {
+      this.scene.resume("game");
+    }
+    this.modalPausedGame = false;
   }
 
   setWhisperHudVisible(visible, animate = false) {

@@ -5,7 +5,7 @@ import { AbilitySystem } from "../systems/AbilitySystem";
 import { PlayerController } from "../systems/PlayerController";
 import { FlightFxController } from "../systems/FlightFxController";
 import { RoomManager } from "../world/RoomManager";
-import { ABILITIES, ABILITY_IDS } from "../data/abilities";
+import { ABILITY_IDS } from "../data/abilities";
 import { EventBus } from "../core/EventBus";
 import { CombatSystem } from "../systems/CombatSystem";
 import { DemonAgent } from "../systems/DemonAgent";
@@ -15,7 +15,8 @@ const LEVEL_MUSIC_KEY = "music-level-1";
 const ROOM_LABELS = {
   start: "Start Chamber",
   shaft: "Combat Hall",
-  crypt: "Sealed Reliquary"
+  crypt: "Sealed Reliquary",
+  sanctum: "Fallen Sanctum"
 };
 
 const WHISPER_INTRO_LINES = [
@@ -38,6 +39,88 @@ const AMBUSH_INTERVAL_MIN_MS = 10000;
 const CORRUPTION_TIER1 = 25;
 const CORRUPTION_TIER2 = 50;
 const CORRUPTION_TIER3 = 75;
+const ASK_WHISPER_COOLDOWN_MS = 9000;
+
+const WHISPER_DIRECTIVES = [
+  {
+    id: "clean_kill",
+    stage: 1,
+    title: "Spill Their Fire",
+    whisper: "Spill their fire before they touch you.",
+    prompt: "Kill 1 enemy without taking damage.",
+    objective: "Kill 1 enemy, take no damage",
+    type: "kill_without_damage",
+    target: 1,
+    timeLimitMs: 18000,
+    corruptionGain: 2,
+    reward: { type: "heal", amount: 14, label: "Restore 14 Vital" }
+  },
+  {
+    id: "airborne_cut",
+    stage: 1,
+    title: "Drift Above Them",
+    whisper: "Do not land. Drift above them.",
+    prompt: "Kill 1 enemy while airborne.",
+    objective: "Kill 1 enemy while airborne",
+    type: "airborne_kill",
+    target: 1,
+    timeLimitMs: 18000,
+    corruptionGain: 2,
+    reward: { type: "aura_charge", amount: 0.4, label: "Recharge Fire Storm" }
+  },
+  {
+    id: "never_pause",
+    stage: 1,
+    title: "Do Not Hesitate",
+    whisper: "Do not hesitate. Move.",
+    prompt: "Keep moving for 5 seconds.",
+    objective: "Move continuously for 5s",
+    type: "keep_moving",
+    target: 5000,
+    timeLimitMs: 12000,
+    corruptionGain: 1,
+    reward: { type: "speed_boost", amount: 7000, label: "Speed boost for 7s" }
+  },
+  {
+    id: "burn_three",
+    stage: 2,
+    title: "Burn Three",
+    whisper: "Burn three. Let none remain.",
+    prompt: "Kill 3 enemies without taking damage.",
+    objective: "Kill 3 enemies, take no damage",
+    type: "kill_without_damage",
+    target: 3,
+    timeLimitMs: 26000,
+    corruptionGain: 4,
+    reward: { type: "aura_boost", amount: 10000, label: "Fire Storm empowered for 10s" }
+  },
+  {
+    id: "ash_hunt",
+    stage: 2,
+    title: "Climb Through Ash",
+    whisper: "Climb through ash, not stone.",
+    prompt: "Kill 2 enemies without dashing.",
+    objective: "Kill 2 enemies, no dash",
+    type: "kill_without_dash",
+    target: 2,
+    timeLimitMs: 20000,
+    corruptionGain: 3,
+    reward: { type: "dual_boost", amount: 8000, label: "Speed + Fire Storm boost for 8s" }
+  },
+  {
+    id: "air_chain",
+    stage: 2,
+    title: "Above The Weak",
+    whisper: "Take them from above. Keep your wings open.",
+    prompt: "Kill 2 enemies while airborne.",
+    objective: "Kill 2 enemies while airborne",
+    type: "airborne_kill",
+    target: 2,
+    timeLimitMs: 22000,
+    corruptionGain: 4,
+    reward: { type: "heal_and_charge", amount: 10, label: "Restore 10 Vital + recharge Fire Storm" }
+  }
+];
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -53,6 +136,10 @@ export class GameScene extends Phaser.Scene {
     this.threatTier = 1;
     this.nextAmbushAt = 0;
     this.corruptionTier = 0;
+    this.lastDirectiveAskAt = -Infinity;
+    this.pendingDirective = null;
+    this.activeDirective = null;
+    this.lastAskAvailabilityKey = "";
   }
 
   create() {
@@ -64,7 +151,7 @@ export class GameScene extends Phaser.Scene {
     this.roomManager = new RoomManager(this, this.player, this.abilitySystem);
     this.combat = new CombatSystem(this, this.player, this.roomManager);
     this.demonAgent = new DemonAgent({
-      onWhisper: (text) => EventBus.emit("demon-whisper", text),
+      onWhisper: (payload) => EventBus.emit("demon-whisper", payload),
       onOffer: (deal) => EventBus.emit("demon-offer", deal),
       onChoice: (choice) => EventBus.emit("demon-choice-offered", choice),
       onStateChanged: (state) => EventBus.emit("demon-state-updated", state),
@@ -116,6 +203,7 @@ export class GameScene extends Phaser.Scene {
     this.emitSliceHudState();
     this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
     this.emitGameplayLoopHud();
+    this.emitAskWhisperAvailability(true);
 
     this.events.once("shutdown", () => {
       this.unregisterDemonHooks();
@@ -142,12 +230,14 @@ export class GameScene extends Phaser.Scene {
       this.lastMoveAt = time;
       this.flightFx?.playMovementTrail(this.player.x, this.player.y, delta);
     }
+    this.updateActiveDirective(time, delta, moving);
     this.roomManager.updateRoomTransitions();
     this.updateDynamicChallenge(time);
     this.demonAgent.tick(time, {
       healthPct: GameState.health / Math.max(1, GameState.maxHealth),
       isIdle: time - this.lastMoveAt >= 5000
     });
+    this.emitAskWhisperAvailability();
   }
 
   showHint(text) {
@@ -156,9 +246,18 @@ export class GameScene extends Phaser.Scene {
 
   registerDemonHooks() {
     this.handleEnemyKilled = (payload) => {
+      const killRoomId = payload?.roomId ?? GameState.currentRoomId;
       this.handleEnemyDefeated(payload);
+      this.onDirectiveEnemyKilled(this.time.now);
+      if (payload?.enemyType === "fallen_seraph") {
+        this.combat?.grantPermanentFireStormBonus(0.2);
+        EventBus.emit("world-hint", "Seraph slain. Fire Storm permanently empowered.");
+      }
       if (payload?.isRoomEnemy && payload?.spawnRoomId && payload?.spawnEnemyId) {
         GameState.markRoomEnemyDefeated(payload.spawnRoomId, payload.spawnEnemyId);
+        if (payload.spawnRoomId === "crypt" && !GameState.slice.hasRelic && !GameState.slice.relicDropped) {
+          this.emitSliceHudState(killRoomId);
+        }
       }
       if (payload?.enemyType === "angel" && !GameState.whisperAwakened) {
         this.startWhisperAwakeningSequence();
@@ -166,21 +265,18 @@ export class GameScene extends Phaser.Scene {
       if (this.isWhisperInteractive()) {
         this.demonAgent.onEvent("enemy_killed", this.time.now);
       }
-      const killRoomId = payload?.roomId ?? GameState.currentRoomId;
-      const cryptClearedNow =
-        killRoomId === "crypt" &&
-        !GameState.slice.hasRelic &&
-        !GameState.slice.relicDropped &&
-        this.roomManager.getCurrentRoomEnemyCount() === 0;
-      if ((payload?.carriesRelic || cryptClearedNow) && !GameState.slice.hasRelic) {
+      const seraphDroppedRelic =
+        payload?.enemyType === "fallen_seraph" && !GameState.slice.hasRelic && !GameState.slice.relicDropped;
+      if ((payload?.carriesRelic || seraphDroppedRelic) && !GameState.slice.hasRelic) {
         GameState.slice.relicAngelSlain = true;
         this.roomManager.spawnRelicDrop(payload.x, payload.y - 96);
-        this.showHint("Final angel fallen. Claim the Flame Relic.");
+        this.showHint("Fallen Seraph dropped the relic. Claim it.");
         this.emitSliceHudState(killRoomId);
       }
     };
     this.handlePlayerDamaged = (payload) => {
       if (!this.isWhisperInteractive()) return;
+      this.onDirectivePlayerDamaged(this.time.now);
       this.demonAgent.onEvent("player_damaged", this.time.now, payload);
       const healthPct = GameState.health / Math.max(1, GameState.maxHealth);
       if (healthPct <= 0.3) {
@@ -189,6 +285,7 @@ export class GameScene extends Phaser.Scene {
     };
     this.handlePlayerDied = () => {
       if (!this.isWhisperInteractive()) return;
+      this.clearActiveDirective();
       this.demonAgent.onEvent("player_died", this.time.now);
     };
     this.handleChestOpened = () => {
@@ -201,6 +298,7 @@ export class GameScene extends Phaser.Scene {
       }
       this.emitSliceHudState(roomId);
       this.emitGameplayLoopHud();
+      this.emitAskWhisperAvailability();
       const label = ROOM_LABELS[roomId] ?? roomId;
       this.showHint(`Entered: ${label}`);
     };
@@ -214,6 +312,7 @@ export class GameScene extends Phaser.Scene {
       } else {
         this.demonAgent.refuseDeal();
       }
+      this.emitAskWhisperAvailability();
     };
     this.handleChoiceResponse = (payload) => {
       if (!this.isWhisperInteractive()) return;
@@ -221,6 +320,7 @@ export class GameScene extends Phaser.Scene {
       if (result) {
         this.applyWhisperChoiceEffect(result);
       }
+      this.emitAskWhisperAvailability();
     };
     this.handleGateBlockedForDemon = () => {
       if (!this.isWhisperInteractive()) return;
@@ -228,6 +328,15 @@ export class GameScene extends Phaser.Scene {
     };
     this.handleDemonState = (state) => {
       this.onCorruptionStateUpdated(state);
+    };
+    this.handleWhisperAskRequested = () => {
+      this.handleAskWhisperRequested();
+    };
+    this.handleWhisperDirectiveResponse = (payload) => {
+      this.handleDirectiveResponse(payload);
+    };
+    this.handlePlayerDashed = () => {
+      this.onDirectiveDashed(this.time.now);
     };
 
     EventBus.on("enemy-killed", this.handleEnemyKilled, this);
@@ -239,6 +348,9 @@ export class GameScene extends Phaser.Scene {
     EventBus.on("demon-choice-response", this.handleChoiceResponse, this);
     EventBus.on("gate-blocked", this.handleGateBlockedForDemon, this);
     EventBus.on("demon-state-updated", this.handleDemonState, this);
+    EventBus.on("whisper-ask-requested", this.handleWhisperAskRequested, this);
+    EventBus.on("whisper-directive-response", this.handleWhisperDirectiveResponse, this);
+    EventBus.on("player-dashed", this.handlePlayerDashed, this);
   }
 
   registerSliceHooks() {
@@ -246,9 +358,8 @@ export class GameScene extends Phaser.Scene {
       if (!this.abilitySystem.has(ABILITY_IDS.FLAME_RING)) {
         this.abilitySystem.unlock(ABILITY_IDS.FLAME_RING);
         EventBus.emit("abilities-updated");
-        EventBus.emit("ability-unlocked", ABILITIES[ABILITY_IDS.FLAME_RING]);
       }
-      this.showHint("Flame Relic claimed. Return to the sealed gate.");
+      this.showHint("Relic claimed. Return to Room C and open the huge chest.");
       this.emitSliceHudState();
     };
     this.handleSliceCheckpoint = () => {
@@ -262,17 +373,17 @@ export class GameScene extends Phaser.Scene {
       this.runCompletedAt = this.time.now;
       this.killCombo = 0;
       this.comboExpiresAt = 0;
-      const escaped = payload?.triggerId === "level-exit";
-      if (escaped && (GameState.currentLevel ?? 1) === 1) {
+      const missionCleared = payload?.triggerId === "level-exit" || payload?.triggerId === "mission-1-chest";
+      if (missionCleared && (GameState.currentLevel ?? 1) === 1) {
         this.showHint("Level 1 complete. Descending to Level 2...");
       } else {
-        this.showHint(escaped ? "Run complete. You escaped." : "Run complete. The ritual held.");
+        this.showHint(missionCleared ? "Run complete. You escaped." : "Run complete. Mission complete.");
       }
       if (this.isWhisperInteractive()) {
         this.demonAgent.onEvent("secret_found", this.time.now);
       }
       this.emitSliceHudState();
-      if (escaped) {
+      if (missionCleared) {
         if ((GameState.currentLevel ?? 1) === 1) {
           this.startLevel2();
         } else {
@@ -297,6 +408,9 @@ export class GameScene extends Phaser.Scene {
     EventBus.off("demon-choice-response", this.handleChoiceResponse, this);
     EventBus.off("gate-blocked", this.handleGateBlockedForDemon, this);
     EventBus.off("demon-state-updated", this.handleDemonState, this);
+    EventBus.off("whisper-ask-requested", this.handleWhisperAskRequested, this);
+    EventBus.off("whisper-directive-response", this.handleWhisperDirectiveResponse, this);
+    EventBus.off("player-dashed", this.handlePlayerDashed, this);
   }
 
   unregisterSliceHooks() {
@@ -316,7 +430,7 @@ export class GameScene extends Phaser.Scene {
 
     if (deal.effect === "aura_damage_boost") {
       this.auraBoostUntil = this.time.now + deal.durationMs;
-      EventBus.emit("world-hint", `${deal.title}: aura empowered`);
+      EventBus.emit("world-hint", `${deal.title}: fire storm empowered`);
       return;
     }
 
@@ -369,6 +483,258 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  handleAskWhisperRequested() {
+    const now = this.time.now;
+    if (!this.isWhisperInteractive()) return;
+    if (!this.canAskWhisper(now)) {
+      const cooldownLeftMs = Math.max(0, this.lastDirectiveAskAt + ASK_WHISPER_COOLDOWN_MS - now);
+      if (cooldownLeftMs > 0) {
+        this.showHint(`Whisper watches... ${Math.ceil(cooldownLeftMs / 1000)}s`);
+      }
+      return;
+    }
+    this.offerWhisperDirective(now);
+  }
+
+  handleDirectiveResponse(payload) {
+    if (!this.pendingDirective || !this.isWhisperInteractive()) return;
+    const decision = payload?.decision === "obey" ? "obey" : "ignore";
+    const now = this.time.now;
+    const directive = this.pendingDirective;
+    this.pendingDirective = null;
+    this.lastDirectiveAskAt = now;
+
+    if (decision === "ignore") {
+      this.demonAgent.shiftCorruption(-1, now);
+      this.showHint("You resist the Whisper. Power slips away.");
+      EventBus.emit("whisper-directive-cleared");
+      this.emitAskWhisperAvailability(true);
+      return;
+    }
+
+    this.activeDirective = {
+      ...directive,
+      progress: 0,
+      tookDamage: false,
+      dashed: false,
+      movingMs: 0,
+      expiresAt: now + directive.timeLimitMs
+    };
+    EventBus.emit("whisper-directive-active", {
+      title: directive.title,
+      objective: directive.objective,
+      progressText: this.getDirectiveProgressText(this.activeDirective),
+      secondsLeft: Math.ceil(directive.timeLimitMs / 1000)
+    });
+    EventBus.emit("demon-whisper", { text: directive.whisper, event: "offer_power" });
+    this.showHint(`Directive accepted: ${directive.objective}`);
+    this.emitAskWhisperAvailability(true);
+  }
+
+  canAskWhisper(now) {
+    if (!this.isWhisperInteractive()) return false;
+    if (this.pendingDirective || this.activeDirective) return false;
+    if (this.demonAgent?.hasPendingInteraction?.()) return false;
+    return now - this.lastDirectiveAskAt >= ASK_WHISPER_COOLDOWN_MS;
+  }
+
+  offerWhisperDirective(now) {
+    const corruption = this.demonAgent?.getState?.().corruption ?? 0;
+    const stage = corruption >= 30 ? 2 : 1;
+    const pool = WHISPER_DIRECTIVES.filter((directive) => directive.stage <= stage);
+    if (!pool.length) return;
+    const template = Phaser.Utils.Array.GetRandom(pool);
+    this.pendingDirective = {
+      ...template,
+      instanceId: `${template.id}-${now}`
+    };
+    EventBus.emit("whisper-directive-offered", {
+      id: this.pendingDirective.instanceId,
+      title: this.pendingDirective.title,
+      prompt: this.pendingDirective.prompt,
+      objective: this.pendingDirective.objective,
+      corruptionGain: this.pendingDirective.corruptionGain,
+      rewardLabel: this.pendingDirective.reward?.label ?? "Unknown reward"
+    });
+    this.emitAskWhisperAvailability(true);
+  }
+
+  updateActiveDirective(now, delta, moving) {
+    if (!this.activeDirective) return;
+    if (now >= this.activeDirective.expiresAt) {
+      this.failDirective("Time shattered. The Whisper is displeased.");
+      return;
+    }
+
+    if (this.activeDirective.type === "keep_moving") {
+      this.activeDirective.movingMs = moving ? this.activeDirective.movingMs + delta : 0;
+      this.activeDirective.progress = this.activeDirective.movingMs;
+      if (this.activeDirective.movingMs >= this.activeDirective.target) {
+        this.completeDirective();
+        return;
+      }
+      this.emitDirectiveProgressUpdate(now);
+    }
+  }
+
+  onDirectiveEnemyKilled(now) {
+    if (!this.activeDirective) return;
+    const directive = this.activeDirective;
+
+    if (directive.type === "kill_without_damage") {
+      if (directive.tookDamage) return;
+      directive.progress += 1;
+      if (directive.progress >= directive.target) {
+        this.completeDirective();
+        return;
+      }
+      this.emitDirectiveProgressUpdate(now);
+      return;
+    }
+
+    if (directive.type === "airborne_kill") {
+      if (this.player?.isGrounded?.()) return;
+      directive.progress += 1;
+      if (directive.progress >= directive.target) {
+        this.completeDirective();
+        return;
+      }
+      this.emitDirectiveProgressUpdate(now);
+      return;
+    }
+
+    if (directive.type === "kill_without_dash") {
+      if (directive.dashed) return;
+      directive.progress += 1;
+      if (directive.progress >= directive.target) {
+        this.completeDirective();
+        return;
+      }
+      this.emitDirectiveProgressUpdate(now);
+    }
+  }
+
+  onDirectivePlayerDamaged() {
+    if (!this.activeDirective) return;
+    this.activeDirective.tookDamage = true;
+    if (this.activeDirective.type === "kill_without_damage") {
+      this.failDirective("You bled. The directive is broken.");
+    }
+  }
+
+  onDirectiveDashed() {
+    if (!this.activeDirective) return;
+    this.activeDirective.dashed = true;
+    if (this.activeDirective.type === "kill_without_dash") {
+      this.failDirective("You dashed. The Whisper wanted restraint.");
+    }
+  }
+
+  completeDirective() {
+    if (!this.activeDirective) return;
+    const now = this.time.now;
+    const directive = this.activeDirective;
+    this.applyDirectiveReward(directive.reward, now);
+    this.demonAgent.shiftCorruption(directive.corruptionGain, now, { forceWhisper: true });
+    this.showHint(`Directive fulfilled: ${directive.reward?.label ?? "Power gained"}`);
+    EventBus.emit("whisper-directive-cleared");
+    this.clearActiveDirective();
+    this.emitAskWhisperAvailability(true);
+  }
+
+  failDirective(message) {
+    if (!this.activeDirective) return;
+    this.demonAgent.shiftCorruption(1, this.time.now);
+    this.showHint(message);
+    EventBus.emit("whisper-directive-cleared");
+    this.clearActiveDirective();
+    this.emitAskWhisperAvailability(true);
+  }
+
+  clearActiveDirective() {
+    this.activeDirective = null;
+  }
+
+  applyDirectiveReward(reward, now) {
+    if (!reward) return;
+    switch (reward.type) {
+      case "heal":
+        GameState.health = Math.min(GameState.maxHealth, GameState.health + (reward.amount ?? 0));
+        EventBus.emit("health-updated", GameState.health);
+        break;
+      case "aura_charge":
+        this.combat?.grantAuraCharge(reward.amount ?? 0.35);
+        break;
+      case "speed_boost":
+        this.moveBoostUntil = Math.max(this.moveBoostUntil, now + (reward.amount ?? 0));
+        break;
+      case "aura_boost":
+        this.auraBoostUntil = Math.max(this.auraBoostUntil, now + (reward.amount ?? 0));
+        break;
+      case "dual_boost":
+        this.moveBoostUntil = Math.max(this.moveBoostUntil, now + (reward.amount ?? 0));
+        this.auraBoostUntil = Math.max(this.auraBoostUntil, now + (reward.amount ?? 0));
+        break;
+      case "heal_and_charge":
+        GameState.health = Math.min(GameState.maxHealth, GameState.health + (reward.amount ?? 0));
+        EventBus.emit("health-updated", GameState.health);
+        this.combat?.grantAuraCharge(0.35);
+        break;
+      default:
+        break;
+    }
+  }
+
+  emitDirectiveProgressUpdate(now) {
+    if (!this.activeDirective) return;
+    EventBus.emit("whisper-directive-active", {
+      title: this.activeDirective.title,
+      objective: this.activeDirective.objective,
+      progressText: this.getDirectiveProgressText(this.activeDirective),
+      secondsLeft: Math.max(0, Math.ceil((this.activeDirective.expiresAt - now) / 1000))
+    });
+  }
+
+  getDirectiveProgressText(directive) {
+    const cap = directive?.target ?? 0;
+    if (directive?.type === "keep_moving") {
+      const progressSec = ((directive.movingMs ?? 0) / 1000).toFixed(1);
+      const goalSec = (cap / 1000).toFixed(1);
+      return `${progressSec}s / ${goalSec}s`;
+    }
+    return `${directive?.progress ?? 0} / ${cap}`;
+  }
+
+  getWhisperCommandLabel(corruption = 0) {
+    if (corruption >= 70) return "OBEY";
+    if (corruption >= 30) return "LISTEN";
+    return "ASK THE WHISPER";
+  }
+
+  emitAskWhisperAvailability(force = false) {
+    const now = this.time?.now ?? 0;
+    const corruption = this.demonAgent?.getState?.().corruption ?? 0;
+    const available = this.canAskWhisper(now);
+    const cooldownLeftMs = available ? 0 : Math.max(0, this.lastDirectiveAskAt + ASK_WHISPER_COOLDOWN_MS - now);
+    const label = this.getWhisperCommandLabel(corruption);
+    const key = `${available}|${label}|${Math.ceil(cooldownLeftMs / 1000)}|${this.activeDirective?.instanceId ?? ""}|${this.pendingDirective?.instanceId ?? ""}`;
+    if (!force && key === this.lastAskAvailabilityKey) return;
+    this.lastAskAvailabilityKey = key;
+    EventBus.emit("whisper-ask-availability", {
+      available,
+      cooldownLeftMs,
+      label,
+      activeDirective: this.activeDirective
+        ? {
+            title: this.activeDirective.title,
+            objective: this.activeDirective.objective,
+            progressText: this.getDirectiveProgressText(this.activeDirective),
+            secondsLeft: Math.max(0, Math.ceil((this.activeDirective.expiresAt - now) / 1000))
+          }
+        : null
+    });
+  }
+
   onCorruptionStateUpdated(state) {
     const corruption = state?.corruption ?? 0;
     GameState.demon = { ...state };
@@ -382,6 +748,7 @@ export class GameScene extends Phaser.Scene {
         this.showHint("Corruption subsides. The world steadies.");
       }
     }
+    this.emitAskWhisperAvailability();
   }
 
   getCorruptionTier(corruption = 0) {
@@ -405,11 +772,17 @@ export class GameScene extends Phaser.Scene {
   emitSliceHudState(roomId = GameState.currentRoomId) {
     const slice = GameState.slice ?? {};
     const currentRoomId = roomId ?? GameState.currentRoomId;
-    const inCombatHall = currentRoomId === "shaft";
     const inReliquary = currentRoomId === "crypt";
-    const shaftAngelDone = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
-    const reliquaryCleared = Boolean(slice.relicDropped || slice.hasRelic);
-    const killAngelDone = Boolean(shaftAngelDone || slice.relicAngelSlain || reliquaryCleared);
+    const inSanctum = currentRoomId === "sanctum";
+    const seraphSlain = Boolean(
+      GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") || slice.relicDropped || slice.hasRelic
+    );
+    const cryptAngelKillCount = [
+      "crypt-angel-1",
+      "crypt-angel-2",
+      "crypt-angel-3"
+    ].filter((enemyId) => GameState.isRoomEnemyDefeated("crypt", enemyId)).length;
+    const killAngelDone = seraphSlain;
     const findRelicDone = Boolean(slice.hasRelic);
     const extractionReady = Boolean(this.abilitySystem.has(ABILITY_IDS.FLAME_RING));
     let phase = "FIND THE POWER";
@@ -418,26 +791,27 @@ export class GameScene extends Phaser.Scene {
 
     if (slice.completed) {
       phase = "SEAL BROKEN";
-      objective = "The reliquary yielded. Push deeper into the world.";
+      objective = "Mission 1 complete. Push deeper into the world.";
+    } else if (inSanctum && !seraphSlain) {
+      phase = "FALLEN SERAPH";
+      objective = "Defeat the Fallen Seraph in the sanctum.";
+      checklistText = `${GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") ? "[V]" : "[ ]"} Slay Fallen Seraph`;
     } else if (!slice.hasRelic) {
       phase = "FIND THE POWER";
-      if (inReliquary && slice.relicDropped) {
-        objective = "Claim the Flame Relic in Sealed Reliquary.";
-        checklistText = "[x] Defeat 3 Angels   [ ] Claim Relic";
-      } else if (inReliquary) {
+      if (inReliquary && !slice.relicDropped) {
         objective = "Defeat all 3 angels in Sealed Reliquary.";
-        checklistText = "[ ] Defeat 3 Angels";
-      } else if (inCombatHall) {
-        objective = "Slay the angel in Combat Hall, then move to Sealed Reliquary.";
-        checklistText = `${shaftAngelDone ? "[x]" : "[ ]"} Defeat Angel`;
+        checklistText = `${cryptAngelKillCount >= 3 ? "[V]" : "[ ]"} Defeat 3 Angels (${cryptAngelKillCount}/3)`;
+      } else if (slice.relicDropped) {
+        objective = "Claim the relic dropped by the Fallen Seraph.";
+        checklistText = "[V] Slay Fallen Seraph   [ ] Claim Relic";
       } else {
         objective = "Find the gate to the next room.";
         checklistText = "[ ] Reach Next Room";
       }
     } else {
       phase = "RETURN TO C";
-      objective = "Return to Sealed Reliquary and cross the fire gate.";
-      checklistText = "[x] Claim Relic";
+      objective = "Return to Room C and open the huge chest with the relic.";
+      checklistText = "[V] Claim Relic   [ ] Open Huge Chest (Room C)";
     }
 
     EventBus.emit("slice-objective-updated", {
@@ -556,6 +930,7 @@ export class GameScene extends Phaser.Scene {
         GameState.whisperIntroComplete = true;
         this.demonAgent.setNarrationLocked(false);
         this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
+        this.emitAskWhisperAvailability(true);
         return;
       }
 
@@ -587,6 +962,8 @@ export class GameScene extends Phaser.Scene {
   endLevel1() {
     if (this.levelEnding) return;
     this.levelEnding = true;
+    this.pendingDirective = null;
+    this.clearActiveDirective();
     this.controller?.setSpeedMultiplier(0);
     this.player?.setVelocity(0, 0);
     this.time.delayedCall(900, () => {
@@ -599,6 +976,8 @@ export class GameScene extends Phaser.Scene {
   startLevel2() {
     if (this.levelEnding) return;
     this.levelEnding = true;
+    this.pendingDirective = null;
+    this.clearActiveDirective();
 
     this.controller?.setSpeedMultiplier(0);
     this.player?.setVelocity(0, 0);

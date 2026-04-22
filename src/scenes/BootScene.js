@@ -10,6 +10,7 @@ import bgLayer1Url from "../assets/images/background/layer-1.png";
 import bgLayer2Url from "../assets/images/background/layer-2.png";
 import bgCeilingUrl from "../assets/images/background/ceiling.png";
 import treasureChestUrl from "../assets/images/objects/treasure-chest.png";
+import hugeChestUrl from "../assets/images/objects/huge-chest.png";
 import relicUrl from "../assets/images/objects/relic.png";
 import exitPortalUrl from "../assets/images/objects/exit.png";
 import roomGateUrl from "../assets/images/objects/gate.png";
@@ -30,6 +31,8 @@ import level1MusicUrl from "../assets/audio/music/music-level-1.mp3";
 import auraSfxUrl from "../assets/audio/sounds/aura.mp3";
 import angelDeadSfxUrl from "../assets/audio/sounds/angel-dead.mp3";
 import exitAppearSfxUrl from "../assets/audio/sounds/exit.mp3";
+import fireStormSfxUrl from "../assets/audio/sounds/fire-storm.mp3";
+import treasureChestSfxUrl from "../assets/audio/sounds/treasure-chest.mp3";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -49,6 +52,7 @@ export class BootScene extends Phaser.Scene {
     this.load.image("bg-ceiling-v2", bgCeilingUrl);
     this.load.image("room-background", bgLayer1Url);
     this.load.image("treasure-chest", treasureChestUrl);
+    this.load.image("huge-chest", hugeChestUrl);
     this.load.image("relic-object", relicUrl);
     this.load.image("exit-portal", exitPortalUrl);
     this.load.image("room-gate", roomGateUrl);
@@ -69,11 +73,30 @@ export class BootScene extends Phaser.Scene {
     this.load.audio("sfx-aura", auraSfxUrl);
     this.load.audio("sfx-angel-dead", angelDeadSfxUrl);
     this.load.audio("sfx-exit-appear", exitAppearSfxUrl);
+    this.load.audio("sfx-fire-storm", fireStormSfxUrl);
+    this.load.audio("sfx-treasure-chest", treasureChestSfxUrl);
   }
 
   create() {
     this.makeTextures();
-    this.scene.start("menu");
+    this.prepareFonts().finally(() => {
+      this.scene.start("menu");
+    });
+  }
+
+  async prepareFonts() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    const timeoutMs = 1800;
+    const timeout = new Promise((resolve) => {
+      this.time.delayedCall(timeoutMs, resolve);
+    });
+    const loading = Promise.allSettled([
+      document.fonts.load("400 24px PICKYSIDE"),
+      document.fonts.load("400 18px PICKYSIDE"),
+      document.fonts.load("400 40px Simbiot"),
+      document.fonts.load("400 28px Simbiot")
+    ]);
+    await Promise.race([loading, timeout]);
   }
 
   makeTextures() {

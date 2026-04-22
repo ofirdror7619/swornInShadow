@@ -1,5 +1,3 @@
-import { ABILITY_IDS } from "./abilities";
-
 const ROOM_WIDTH = 1600;
 const ROOM_HEIGHT = 900;
 
@@ -83,7 +81,8 @@ export const ROOMS = {
       spawn_inner: { x: 1240, y: 700 }
     },
     exits: {
-      left: { toRoomId: "shaft", spawn: "spawn_right" }
+      left: { toRoomId: "shaft", spawn: "spawn_right" },
+      right: { toRoomId: "sanctum", spawn: "spawn_left" }
     },
     platforms: [
       { x: 800, y: 860, width: 1600, height: 80 },
@@ -93,27 +92,8 @@ export const ROOMS = {
       { x: 1110, y: 560, width: 220, height: 30 },
       { x: 1330, y: 430, width: 240, height: 30 }
     ],
-    abilityGates: [
-      {
-        x: 1165,
-        y: 450,
-        width: 70,
-        height: 760,
-        requiredAbility: ABILITY_IDS.FLAME_RING,
-        directionHint: "inner-sanctum",
-        style: "flame-wall"
-      }
-    ],
-    sliceTriggers: [
-      {
-        id: "crypt-ritual",
-        kind: "ritual",
-        x: 1420,
-        y: 370,
-        width: 110,
-        height: 130
-      }
-    ],
+    abilityGates: [],
+    sliceTriggers: [],
     enemies: [
       {
         id: "crypt-angel-1",
@@ -135,6 +115,36 @@ export const ROOMS = {
         x: 1240,
         y: 390,
         patrol: { left: 1110, right: 1410, y: 390 }
+      }
+    ]
+  },
+  sanctum: {
+    id: "sanctum",
+    allowRespawn: false,
+    bgColor: 0x8ea7cd,
+    spawns: {
+      spawn_left: { x: 130, y: 700 },
+      spawn_center: { x: 820, y: 650 },
+      spawn_right: { x: 1470, y: 700 }
+    },
+    exits: {
+      left: { toRoomId: "crypt", spawn: "spawn_inner" }
+    },
+    platforms: [
+      { x: 800, y: 860, width: 1600, height: 80 },
+      { x: 420, y: 700, width: 260, height: 30 },
+      { x: 800, y: 620, width: 320, height: 30 },
+      { x: 1180, y: 700, width: 260, height: 30 }
+    ],
+    abilityGates: [],
+    sliceTriggers: [],
+    enemies: [
+      {
+        id: "sanctum-seraph-1",
+        type: "fallen_seraph",
+        x: 820,
+        y: 560,
+        patrol: { left: 560, right: 1120, y: 560 }
       }
     ]
   }

@@ -48,6 +48,8 @@ class GameStateStore {
     };
     this.collected = new Set();
     this.roomEnemyDefeated = new Set();
+    this.roomChestOpened = new Set();
+    this.roomEnemyHealth = new Map();
     this.unlockedAbilities = new Set([ABILITY_IDS.DASH]);
     this.slice = this.createSliceState();
   }
@@ -57,6 +59,8 @@ class GameStateStore {
     this.currentRoomId = "start";
     this.playerSpawnKey = "spawn_center";
     this.roomEnemyDefeated = new Set();
+    this.roomChestOpened = new Set();
+    this.roomEnemyHealth = new Map();
   }
 
   unlockAbility(id) {
@@ -79,6 +83,28 @@ class GameStateStore {
   isRoomEnemyDefeated(roomId, enemyId) {
     if (!roomId || !enemyId) return false;
     return this.roomEnemyDefeated.has(this.getRoomEnemyKey(roomId, enemyId));
+  }
+
+  markRoomChestOpened(roomId, chestId) {
+    if (!roomId || !chestId) return;
+    this.roomChestOpened.add(`${roomId}::${chestId}`);
+  }
+
+  isRoomChestOpened(roomId, chestId) {
+    if (!roomId || !chestId) return false;
+    return this.roomChestOpened.has(`${roomId}::${chestId}`);
+  }
+
+  setRoomEnemyHealth(roomId, enemyId, health) {
+    if (!roomId || !enemyId) return;
+    const key = this.getRoomEnemyKey(roomId, enemyId);
+    this.roomEnemyHealth.set(key, Math.max(0, Math.round(health ?? 0)));
+  }
+
+  getRoomEnemyHealth(roomId, enemyId) {
+    if (!roomId || !enemyId) return null;
+    const key = this.getRoomEnemyKey(roomId, enemyId);
+    return this.roomEnemyHealth.has(key) ? this.roomEnemyHealth.get(key) : null;
   }
 }
 

@@ -1,11 +1,13 @@
-export class HungerVoice {
+export class WhisperVoice {
   constructor({ onToggle } = {}) {
     this.onToggle = onToggle;
     this.enabled = true;
     this.dominance = 0;
     this.voice = null;
     this.unlockedByUserGesture = false;
-    this.isSupported =
+    this.speakQueue = Promise.resolve();
+
+    this.isBrowserTtsSupported =
       typeof window !== "undefined" &&
       "speechSynthesis" in window &&
       typeof window.SpeechSynthesisUtterance !== "undefined";
@@ -20,12 +22,14 @@ export class HungerVoice {
       window.removeEventListener("keydown", this.handleFirstGesture);
     };
 
-    if (!this.isSupported) return;
+    if (typeof window !== "undefined") {
+      window.addEventListener("pointerdown", this.handleFirstGesture, { once: true });
+      window.addEventListener("keydown", this.handleFirstGesture, { once: true });
+    }
 
+    if (!this.isBrowserTtsSupported) return;
     this.voice = this.pickVoice();
     window.speechSynthesis.onvoiceschanged = this.handleVoicesChanged;
-    window.addEventListener("pointerdown", this.handleFirstGesture, { once: true });
-    window.addEventListener("keydown", this.handleFirstGesture, { once: true });
   }
 
   setDominance(dominance = 0) {
@@ -34,20 +38,23 @@ export class HungerVoice {
 
   toggle() {
     this.enabled = !this.enabled;
-    if (!this.enabled && this.isSupported) {
-      window.speechSynthesis.cancel();
+    if (!this.enabled) {
+      this.cancelActiveSpeech();
     }
-    this.onToggle?.(this.enabled, this.isSupported);
+    this.onToggle?.(this.enabled, this.isBrowserTtsSupported);
     return this.enabled;
   }
 
-  speakWhisper(text) {
-    return this.speak(text);
+  speakWhisper(text, options = {}) {
+    return this.speak(text, { ...options, channel: "whisper" });
   }
 
   speakOffer(deal) {
-    if (!deal?.title) return;
-    return this.speak(`I offer you ${deal.title}. Accept, and become stronger.`);
+    if (!deal?.title) return { spoken: false, estimatedMs: 0 };
+    return this.speak(`I offer you ${deal.title}. Accept, and become stronger.`, {
+      channel: "offer",
+      event: "offer_power"
+    });
   }
 
   speak(text, options = {}) {
@@ -55,33 +62,71 @@ export class HungerVoice {
 
     const line = text.trim();
     if (!line) return { spoken: false, estimatedMs: 0 };
+
     const stylized = this.stylizeLine(line);
     const estimatedMs = this.estimateSpeechDurationMs(stylized);
 
-    if (!this.isSupported || !this.enabled || !this.unlockedByUserGesture) {
+    if (!this.enabled) {
       return { spoken: false, estimatedMs };
     }
 
-    const voice = this.voice ?? this.pickVoice();
-    const utterance = this.createUtterance(stylized, voice);
-    const onEnd = options?.onEnd;
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      onEnd?.();
-    };
-    utterance.onend = finish;
-    utterance.onerror = finish;
+    if (this.isBrowserTtsSupported && this.unlockedByUserGesture) {
+      this.enqueueSpeech(async () => {
+        await this.playBrowserSpeech(stylized);
+      }, options?.onEnd);
+      return { spoken: true, estimatedMs };
+    }
 
-    // Queue naturally; do not cancel active utterances.
-    window.speechSynthesis.speak(utterance);
+    return { spoken: false, estimatedMs };
+  }
 
-    return { spoken: true, estimatedMs };
+  enqueueSpeech(task, onEnd) {
+    this.speakQueue = this.speakQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (!this.enabled) return;
+        try {
+          await task();
+        } finally {
+          onEnd?.();
+        }
+      })
+      .catch(() => {
+        onEnd?.();
+      });
+  }
+
+  playBrowserSpeech(text) {
+    return new Promise((resolve) => {
+      if (!this.isBrowserTtsSupported) {
+        resolve();
+        return;
+      }
+
+      const voice = this.voice ?? this.pickVoice();
+      const utterance = this.createUtterance(text, voice);
+
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+
+      utterance.onend = done;
+      utterance.onerror = done;
+      window.speechSynthesis.speak(utterance);
+    });
+  }
+
+  cancelActiveSpeech() {
+    if (this.isBrowserTtsSupported) {
+      window.speechSynthesis.cancel();
+    }
   }
 
   pickVoice() {
-    if (!this.isSupported) return null;
+    if (!this.isBrowserTtsSupported) return null;
     const voices = window.speechSynthesis.getVoices();
     if (!voices.length) return null;
 
@@ -95,14 +140,9 @@ export class HungerVoice {
 
     const avoid = /(espeak|sam|robot|synth|compact)/i;
     const nonRobotic = english.filter((v) => !avoid.test(v.name));
-    if (nonRobotic.length) {
-      return nonRobotic[0];
-    }
+    if (nonRobotic.length) return nonRobotic[0];
 
-    const preferred = english.find((v) =>
-      /(david|mark|george|daniel|alex|fred|male|man|google us english|en-us)/i.test(v.name)
-    );
-    return preferred ?? english[0];
+    return english[0];
   }
 
   createUtterance(text, voice) {
@@ -135,11 +175,11 @@ export class HungerVoice {
   }
 
   destroy() {
-    if (!this.isSupported) return;
-    window.speechSynthesis.cancel();
+    this.cancelActiveSpeech();
+    if (typeof window === "undefined") return;
     window.removeEventListener("pointerdown", this.handleFirstGesture);
     window.removeEventListener("keydown", this.handleFirstGesture);
-    if (window.speechSynthesis.onvoiceschanged === this.handleVoicesChanged) {
+    if (this.isBrowserTtsSupported && window.speechSynthesis.onvoiceschanged === this.handleVoicesChanged) {
       window.speechSynthesis.onvoiceschanged = null;
     }
   }
