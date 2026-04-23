@@ -5,7 +5,7 @@ import demonRightWingUrl from "../assets/images/demon/demon-right-wing.png";
 import angelBodyUrl from "../assets/images/angel/angel-body.png";
 import angelLeftWingUrl from "../assets/images/angel/angel-left-wing.png";
 import angelRightWingUrl from "../assets/images/angel/angel-right-wing.png";
-import openingLogoUrl from "../assets/images/opening/logo.png";
+import openingLogoUrl from "../assets/images/opening/logo-new.png";
 import bgLayer1Url from "../assets/images/background/layer-1.png";
 import bgLayer2Url from "../assets/images/background/layer-2.png";
 import bgCeilingUrl from "../assets/images/background/ceiling.png";

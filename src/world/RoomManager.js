@@ -1006,8 +1006,42 @@ export class RoomManager {
         toRoomId: directionRoomId,
         requiredAbility
       });
+      return true;
     }
-    return blocked;
+
+    const objectiveBlock = this.getObjectiveGateBlock(directionRoomId);
+    if (objectiveBlock) {
+      EventBus.emit("world-hint", objectiveBlock.hint);
+      return true;
+    }
+    return false;
+  }
+
+  getObjectiveGateBlock(directionRoomId) {
+    const currentRoomId = GameState.currentRoomId;
+    if (currentRoomId === "shaft" && directionRoomId === "crypt") {
+      const wardingAngelSlain = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
+      if (!wardingAngelSlain) {
+        return {
+          hint: "The east gate is sealed. Slay the Warding Angel first."
+        };
+      }
+    }
+
+    if (currentRoomId === "crypt" && directionRoomId === "sanctum") {
+      const reliquaryKills = [
+        "crypt-angel-1",
+        "crypt-angel-2",
+        "crypt-angel-3"
+      ].filter((enemyId) => GameState.isRoomEnemyDefeated("crypt", enemyId)).length;
+      if (reliquaryKills < 3) {
+        return {
+          hint: `The sanctum remains sealed. Break the reliquary (${reliquaryKills}/3).`
+        };
+      }
+    }
+
+    return null;
   }
 
   getRespawnTarget() {

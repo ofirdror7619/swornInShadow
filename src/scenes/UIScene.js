@@ -28,6 +28,10 @@ const AURA_BAR_X = 392;
 const AURA_BAR_Y = 48;
 const AURA_BAR_W = 220;
 const AURA_BAR_H = 20;
+const AURA_EMPOWER_BAR_X = AURA_BAR_X + 4;
+const AURA_EMPOWER_BAR_Y = 76;
+const AURA_EMPOWER_BAR_W = AURA_BAR_W - 8;
+const AURA_EMPOWER_BAR_H = 10;
 const FIRE_STORM_LABEL = "FIRE STORM";
 const RESOURCE_LABEL_Y = 24;
 const RESOURCE_LABEL_FONT_SIZE = "18px";
@@ -59,6 +63,9 @@ export class UIScene extends Phaser.Scene {
     this.hintTimer = null;
     this.auraState = "ready";
     this.auraCharge = 1;
+    this.auraEmpowerCharge = 0;
+    this.auraEmpowered = false;
+    this.auraEmpoweredLeftMs = 0;
     this.healthTargetPct = 1;
     this.displayHealthPct = 1;
     this.delayedHealthPct = 1;
@@ -287,6 +294,8 @@ export class UIScene extends Phaser.Scene {
     this.auraFill = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 3);
     this.auraGloss = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 4);
     this.auraOrbBack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 1);
+    this.auraEmpowerTrack = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 2);
+    this.auraEmpowerFill = this.add.graphics().setScrollFactor(0).setDepth(HUD_Z + 3);
     this.auraGlyph = this.add
       .image(AURA_ORB_X, AURA_ORB_Y + 2, "fx-flame")
       .setScale(1.02)
@@ -318,6 +327,19 @@ export class UIScene extends Phaser.Scene {
       .setDepth(HUD_Z + 5)
       .setResolution(2);
     this.auraSubText.setLetterSpacing(1.2);
+    this.auraEmpowerText = this.add
+      .text(AURA_EMPOWER_BAR_X, AURA_EMPOWER_BAR_Y - 12, "INNER FLAME", {
+        fontFamily: HUD_FONT,
+        fontSize: "13px",
+        color: "#d8b28b",
+        stroke: "#1c0d07",
+        strokeThickness: 1,
+        letterSpacing: 0.8
+      })
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 5)
+      .setResolution(2);
+    this.auraEmpowerText.setLetterSpacing(1.1);
   }
 
   createHintLayer() {
@@ -808,8 +830,11 @@ export class UIScene extends Phaser.Scene {
 
     const slice = GameState.slice ?? {};
     const currentRoomId = GameState.currentRoomId ?? "start";
+    const inStart = currentRoomId === "start";
+    const inShaft = currentRoomId === "shaft";
     const inReliquary = currentRoomId === "crypt";
     const inSanctum = currentRoomId === "sanctum";
+    const shaftAngelSlain = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
     const seraphSlain = Boolean(
       GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") || slice.relicDropped || slice.hasRelic
     );
@@ -820,15 +845,23 @@ export class UIScene extends Phaser.Scene {
     ].filter((enemyId) => GameState.isRoomEnemyDefeated("crypt", enemyId)).length;
     if (slice.completed) {
       this.onSliceObjectiveUpdated({ objective: "Mission 1 complete. Push deeper into the world." });
+    } else if (inStart && !slice.hasRelic) {
+      this.onSliceObjectiveUpdated({ objective: "Cross into the Combat Hall." });
+    } else if (inShaft && !slice.hasRelic && !shaftAngelSlain) {
+      this.onSliceObjectiveUpdated({ objective: "Slay the Warding Angel to unseal the east gate." });
     } else if (inSanctum && !seraphSlain) {
-      this.onSliceObjectiveUpdated({ objective: "Defeat the Fallen Seraph in the sanctum." });
+      this.onSliceObjectiveUpdated({
+        objective: slice.relicDropped
+          ? "Claim the relic dropped by the Fallen Seraph."
+          : "Defeat the Fallen Seraph in the sanctum."
+      });
     } else if (!slice.hasRelic) {
       this.onSliceObjectiveUpdated({
         objective: inReliquary && !slice.relicDropped
-          ? "Defeat all 3 angels in Sealed Reliquary."
+          ? "Break the Sealed Reliquary by defeating all 3 angels."
           : slice.relicDropped
             ? "Claim the relic dropped by the Fallen Seraph."
-            : "Find the gate to the next room."
+            : "Push deeper into the cathedral."
       });
     } else {
       this.onSliceObjectiveUpdated({
@@ -843,11 +876,15 @@ export class UIScene extends Phaser.Scene {
       extractionReady: Boolean(GameState.hasAbility(ABILITY_IDS.FLAME_RING)),
       checklistText: slice.hasRelic
         ? "[V] Claim Relic   [ ] Open Huge Chest (Room C)"
+        : inStart && !slice.hasRelic
+          ? "[ ] Enter Room B"
+          : inShaft && !slice.hasRelic && !shaftAngelSlain
+            ? `${shaftAngelSlain ? "[V]" : "[ ]"} Slay Warding Angel`
         : inReliquary && !slice.relicDropped
           ? `${cryptAngelKillCount >= 3 ? "[V]" : "[ ]"} Defeat 3 Angels (${cryptAngelKillCount}/3)`
           : slice.relicDropped
             ? "[V] Slay Fallen Seraph   [ ] Claim Relic"
-            : "[ ] Reach Next Room"
+            : "[ ] Reach the next sealed room"
     });
     this.updateMiniMap(GameState.currentRoomId);
   }
@@ -859,6 +896,9 @@ export class UIScene extends Phaser.Scene {
   onAuraUpdated(payload) {
     this.auraState = payload?.state ?? "ready";
     this.auraCharge = Phaser.Math.Clamp(payload?.charge ?? 0, 0, 1);
+    this.auraEmpowerCharge = Phaser.Math.Clamp(payload?.empoweredCharge ?? 0, 0, 1);
+    this.auraEmpowered = Boolean(payload?.empoweredActive);
+    this.auraEmpoweredLeftMs = Math.max(0, payload?.empoweredLeftMs ?? 0);
     if (this.auraState === "active") {
       this.auraStateText.setText("ACTIVE");
       this.auraStateText.setColor("#ffb56e");
@@ -872,6 +912,14 @@ export class UIScene extends Phaser.Scene {
       this.auraStateText.setText("READY");
       this.auraStateText.setColor("#1a120c");
       this.auraGlyph.setTint(0xffc27a);
+    }
+    if (this.auraEmpowered) {
+      const sec = Math.max(1, Math.ceil(this.auraEmpoweredLeftMs / 1000));
+      this.auraEmpowerText.setText(`INNER FLAME ${sec}s`);
+      this.auraEmpowerText.setColor("#ffd38a");
+    } else {
+      this.auraEmpowerText.setText("INNER FLAME");
+      this.auraEmpowerText.setColor(this.auraEmpowerCharge >= 0.95 ? "#ffcf80" : "#b9916e");
     }
   }
 
@@ -987,6 +1035,46 @@ export class UIScene extends Phaser.Scene {
     this.auraOrbBack.fillStyle(auraColor, pulse + 0.1);
     this.auraOrbBack.fillCircle(AURA_ORB_X, AURA_ORB_Y, AURA_ORB_R - 6);
     this.auraGlyph.setScale(0.9 + Math.sin(timeNow * 0.015) * 0.04);
+
+    const empowerW = Math.max(0, AURA_EMPOWER_BAR_W * this.auraEmpowerCharge);
+    this.auraEmpowerTrack.clear();
+    this.auraEmpowerTrack.fillStyle(0x060303, 0.98);
+    this.auraEmpowerTrack.fillRoundedRect(
+      AURA_EMPOWER_BAR_X,
+      AURA_EMPOWER_BAR_Y,
+      AURA_EMPOWER_BAR_W,
+      AURA_EMPOWER_BAR_H,
+      4
+    );
+    this.auraEmpowerTrack.lineStyle(2, this.auraEmpowered ? 0xffc07a : 0x7d4b2e, 0.95);
+    this.auraEmpowerTrack.strokeRoundedRect(
+      AURA_EMPOWER_BAR_X,
+      AURA_EMPOWER_BAR_Y,
+      AURA_EMPOWER_BAR_W,
+      AURA_EMPOWER_BAR_H,
+      4
+    );
+    this.auraEmpowerFill.clear();
+    const empowerPulse = this.auraEmpowered ? 0.78 + Math.sin(timeNow * 0.018) * 0.22 : 0.9;
+    const empowerColor = this.auraEmpowered ? 0xff8e47 : this.auraEmpowerCharge >= 0.98 ? 0xffbf69 : 0xb16838;
+    this.auraEmpowerFill.fillStyle(empowerColor, empowerPulse);
+    this.auraEmpowerFill.fillRoundedRect(
+      AURA_EMPOWER_BAR_X + 1,
+      AURA_EMPOWER_BAR_Y + 1,
+      empowerW,
+      AURA_EMPOWER_BAR_H - 2,
+      3
+    );
+    if (empowerW > 10) {
+      this.auraEmpowerFill.fillStyle(0xfff0c2, this.auraEmpowered ? 0.28 : 0.18);
+      this.auraEmpowerFill.fillRoundedRect(
+        AURA_EMPOWER_BAR_X + 2,
+        AURA_EMPOWER_BAR_Y + 2,
+        Math.max(0, empowerW - 6),
+        2,
+        1
+      );
+    }
   }
 
   showHint(message) {

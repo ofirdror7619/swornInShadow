@@ -255,6 +255,18 @@ export class GameScene extends Phaser.Scene {
       }
       if (payload?.isRoomEnemy && payload?.spawnRoomId && payload?.spawnEnemyId) {
         GameState.markRoomEnemyDefeated(payload.spawnRoomId, payload.spawnEnemyId);
+        if (payload.spawnRoomId === "shaft" && payload.spawnEnemyId === "shaft-angel-1") {
+          this.showHint("The warding angel falls. The east gate opens.");
+          this.emitSliceHudState(killRoomId);
+        }
+        if (payload.spawnRoomId === "crypt") {
+          const reliquaryKills = ["crypt-angel-1", "crypt-angel-2", "crypt-angel-3"].filter((enemyId) =>
+            GameState.isRoomEnemyDefeated("crypt", enemyId)
+          ).length;
+          if (reliquaryKills >= 3) {
+            this.showHint("The reliquary breaks. The sanctum gate yields.");
+          }
+        }
         if (payload.spawnRoomId === "crypt" && !GameState.slice.hasRelic && !GameState.slice.relicDropped) {
           this.emitSliceHudState(killRoomId);
         }
@@ -301,6 +313,7 @@ export class GameScene extends Phaser.Scene {
       this.emitAskWhisperAvailability();
       const label = ROOM_LABELS[roomId] ?? roomId;
       this.showHint(`Entered: ${label}`);
+      this.maybeOfferRoomWhisperChoice(roomId);
     };
     this.handleDealResponse = (payload) => {
       if (!this.isWhisperInteractive()) return;
@@ -498,6 +511,49 @@ export class GameScene extends Phaser.Scene {
         EventBus.emit("health-updated", GameState.health);
       }
       EventBus.emit("world-hint", "Voice denied. Your will hardens.");
+      return;
+    }
+    if (effect === "embrace_reliquary") {
+      this.combat?.grantAuraCharge(0.55);
+      this.moveBoostUntil = Math.max(this.moveBoostUntil, this.time.now + 9000);
+      this.triggerAmbushWave("whisper-reliquary");
+      EventBus.emit("world-hint", "The reliquary drinks deeply. Fire answers.");
+      return;
+    }
+    if (effect === "resist_reliquary") {
+      GameState.health = Math.min(GameState.maxHealth, GameState.health + 12);
+      EventBus.emit("health-updated", GameState.health);
+      EventBus.emit("world-hint", "You refuse the reliquary. Your breath steadies.");
+      return;
+    }
+    if (effect === "embrace_sanctum") {
+      this.combat?.grantPermanentFireStormBonus(0.1);
+      this.auraBoostUntil = Math.max(this.auraBoostUntil, this.time.now + 10000);
+      EventBus.emit("world-hint", "Ash crowns you. Fire Storm deepens.");
+      return;
+    }
+    if (effect === "resist_sanctum") {
+      GameState.health = Math.min(GameState.maxHealth, GameState.health + 18);
+      EventBus.emit("health-updated", GameState.health);
+      this.moveBoostUntil = Math.max(this.moveBoostUntil, this.time.now + 5000);
+      EventBus.emit("world-hint", "You enter alone, but unbroken.");
+    }
+  }
+
+  maybeOfferRoomWhisperChoice(roomId) {
+    if (!this.isWhisperInteractive()) return;
+    let choiceReason = null;
+    if (roomId === "crypt" && !GameState.slice.hasRelic) {
+      choiceReason = "reliquary_room";
+    } else if (roomId === "sanctum" && !GameState.slice.hasRelic) {
+      choiceReason = "sanctum_room";
+    }
+    if (!choiceReason) return;
+    const choiceKey = `whisper-choice:${choiceReason}`;
+    if (GameState.collected.has(choiceKey)) return;
+    const offered = this.demonAgent.maybeOfferChoice(choiceReason, this.time.now);
+    if (offered) {
+      GameState.collected.add(choiceKey);
     }
   }
 
@@ -790,8 +846,11 @@ export class GameScene extends Phaser.Scene {
   emitSliceHudState(roomId = GameState.currentRoomId) {
     const slice = GameState.slice ?? {};
     const currentRoomId = roomId ?? GameState.currentRoomId;
+    const inStart = currentRoomId === "start";
+    const inShaft = currentRoomId === "shaft";
     const inReliquary = currentRoomId === "crypt";
     const inSanctum = currentRoomId === "sanctum";
+    const shaftAngelSlain = GameState.isRoomEnemyDefeated("shaft", "shaft-angel-1");
     const seraphSlain = Boolean(
       GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") || slice.relicDropped || slice.hasRelic
     );
@@ -810,21 +869,33 @@ export class GameScene extends Phaser.Scene {
     if (slice.completed) {
       phase = "SEAL BROKEN";
       objective = "Mission 1 complete. Push deeper into the world.";
+    } else if (inStart && !slice.hasRelic) {
+      phase = "FIRST DESCENT";
+      objective = "Cross into the Combat Hall.";
+      checklistText = "[ ] Enter Room B";
+    } else if (inShaft && !slice.hasRelic && !shaftAngelSlain) {
+      phase = "WARDING ANGEL";
+      objective = "Slay the Warding Angel to unseal the east gate.";
+      checklistText = `${shaftAngelSlain ? "[V]" : "[ ]"} Slay Warding Angel`;
     } else if (inSanctum && !seraphSlain) {
       phase = "FALLEN SERAPH";
-      objective = "Defeat the Fallen Seraph in the sanctum.";
-      checklistText = `${GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") ? "[V]" : "[ ]"} Slay Fallen Seraph`;
+      objective = slice.relicDropped
+        ? "Claim the relic dropped by the Fallen Seraph."
+        : "Defeat the Fallen Seraph in the sanctum.";
+      checklistText = slice.relicDropped
+        ? "[V] Slay Fallen Seraph   [ ] Claim Relic"
+        : `${GameState.isRoomEnemyDefeated("sanctum", "sanctum-seraph-1") ? "[V]" : "[ ]"} Slay Fallen Seraph`;
     } else if (!slice.hasRelic) {
       phase = "FIND THE POWER";
       if (inReliquary && !slice.relicDropped) {
-        objective = "Defeat all 3 angels in Sealed Reliquary.";
+        objective = "Break the Sealed Reliquary by defeating all 3 angels.";
         checklistText = `${cryptAngelKillCount >= 3 ? "[V]" : "[ ]"} Defeat 3 Angels (${cryptAngelKillCount}/3)`;
       } else if (slice.relicDropped) {
         objective = "Claim the relic dropped by the Fallen Seraph.";
         checklistText = "[V] Slay Fallen Seraph   [ ] Claim Relic";
       } else {
-        objective = "Find the gate to the next room.";
-        checklistText = "[ ] Reach Next Room";
+        objective = "Push deeper into the cathedral.";
+        checklistText = "[ ] Reach the next sealed room";
       }
     } else {
       phase = "RETURN TO C";
@@ -854,6 +925,8 @@ export class GameScene extends Phaser.Scene {
 
     const auraCharge = Phaser.Math.Clamp(0.05 + this.killCombo * 0.02, 0.05, 0.2);
     this.combat?.grantAuraCharge(auraCharge);
+    const empoweredGain = Phaser.Math.Clamp(18 + this.killCombo * 4, 18, 34);
+    this.combat?.grantEmpoweredMeter(empoweredGain);
     if (this.killCombo >= 3) {
       const healAmount = Math.min(8, 1 + Math.floor(this.killCombo / 2));
       const healed = Math.min(GameState.maxHealth, GameState.health + healAmount);

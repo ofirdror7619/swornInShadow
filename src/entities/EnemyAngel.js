@@ -39,6 +39,11 @@ const AURA_DAMAGE = 10;
 const AURA_ORBIT_COUNT = 5;
 const AURA_ORBIT_Y_SCALE = 0.72;
 const AURA_ORBIT_SPEED = 0.0043;
+const WOUNDED_THRESHOLD_PCT = 0.4;
+const WOUNDED_CHASE_MULTIPLIER = 1.2;
+const WOUNDED_DIVE_COOLDOWN_MS = 2200;
+const WOUNDED_AURA_COOLDOWN_MS = 1700;
+const WOUNDED_AURA_DAMAGE = 12;
 
 export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
   constructor(scene, x, y, patrol, _options = {}) {
@@ -77,6 +82,7 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     this.auraCooldownLeft = Phaser.Math.Between(700, 1800);
     this.auraOrbitTime = 0;
     this.auraDamage = AURA_DAMAGE;
+    this.wounded = false;
     this.telegraphGraphics = scene.add.graphics();
     this.telegraphGraphics.setDepth(RENDER_DEPTH + 2);
 
@@ -295,7 +301,8 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     if (this.state === "chase") {
       const toPlayer = new Phaser.Math.Vector2(player.x - this.x, player.y - this.y);
       const dir = toPlayer.clone().normalize();
-      this.body.setVelocity(dir.x * CHASE_SPEED, dir.y * CHASE_SPEED);
+      const chaseSpeed = this.wounded ? CHASE_SPEED * WOUNDED_CHASE_MULTIPLIER : CHASE_SPEED;
+      this.body.setVelocity(dir.x * chaseSpeed, dir.y * chaseSpeed);
       if (Math.abs(this.body.velocity.x) > 4) {
         this.patrolDir = this.body.velocity.x < 0 ? -1 : 1;
       }
@@ -423,6 +430,7 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
     if (this.isDead) return false;
 
     this.health -= amount;
+    this.updateWoundedState();
     if (this.isRoomEnemy && this.spawnRoomId && this.spawnEnemyId) {
       GameState.setRoomEnemyHealth(this.spawnRoomId, this.spawnEnemyId, this.health);
     }
@@ -475,7 +483,29 @@ export class EnemyAngel extends Phaser.Physics.Arcade.Sprite {
 
   shouldDive(distance) {
     if (this.diveCooldownLeft > 0) return false;
-    return distance >= DIVE_MIN_RANGE && distance <= DIVE_MAX_RANGE;
+    const minRange = this.wounded ? DIVE_MIN_RANGE - 25 : DIVE_MIN_RANGE;
+    const maxRange = this.wounded ? DIVE_MAX_RANGE + 50 : DIVE_MAX_RANGE;
+    return distance >= minRange && distance <= maxRange;
+  }
+
+  updateWoundedState() {
+    if (this.wounded || this.health > MAX_HEALTH * WOUNDED_THRESHOLD_PCT) return;
+    this.wounded = true;
+    this.auraDamage = WOUNDED_AURA_DAMAGE;
+    this.diveCooldownLeft = Math.min(this.diveCooldownLeft, WOUNDED_DIVE_COOLDOWN_MS);
+    this.auraCooldownLeft = Math.min(this.auraCooldownLeft, WOUNDED_AURA_COOLDOWN_MS);
+    this.auraRing?.setStrokeStyle(2, 0xffd39a, 0.68);
+    this.scene.add
+      .particles(this.x, this.y, "fx-ember", {
+        lifespan: { min: 180, max: 320 },
+        quantity: 10,
+        speed: { min: 40, max: 120 },
+        scale: { start: 1.1, end: 0 },
+        alpha: { start: 0.7, end: 0 },
+        tint: [0xffc978, 0xffefba, 0xff8c66],
+        blendMode: "ADD"
+      })
+      .setDepth(RENDER_DEPTH + 3);
   }
 
   predictDiveVector(player) {

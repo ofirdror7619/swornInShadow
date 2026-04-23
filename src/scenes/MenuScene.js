@@ -8,13 +8,13 @@ export class MenuScene extends Phaser.Scene {
 
   create() {
     const { width, height } = this.scale;
-    this.cameras.main.setBackgroundColor("#070b14");
+    this.cameras.main.setBackgroundColor("#000000");
 
     const logo = this.add.image(width * 0.5, height * 0.35, "opening-logo").setOrigin(0.5);
     const maxLogoWidth = width * 0.52;
     const logoScale = maxLogoWidth / logo.width;
     logo.setScale(logoScale);
-    const promptY = Math.min(height * 0.78, this.cameras.main.centerY + 120);
+    const promptY = Math.min(height * 0.9, this.cameras.main.centerY + 200);
     const text = this.add
       .text(this.cameras.main.centerX, promptY, "Press Enter...", {
         fontFamily: "'Simbiot', serif",

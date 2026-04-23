@@ -24,6 +24,9 @@ const FIRE_STORM_SMOKE_IMPACT_COUNT = 10;
 const PLAYER_IFRAME_MS = 680;
 const AURA_SFX_VOLUME = 0.72;
 const AURA_SFX_FADE_OUT_MS = 220;
+const EMPOWERED_FIRE_STORM_DURATION_MS = 9000;
+const EMPOWERED_FIRE_STORM_DAMAGE_MULTIPLIER = 1.55;
+const EMPOWERED_KILL_METER_MAX = 100;
 
 export class CombatSystem {
   constructor(scene, player, roomManager) {
@@ -36,6 +39,8 @@ export class CombatSystem {
     this.strikeTickLeft = 0;
     this.auraDamageMultiplier = 1;
     this.permanentFireStormBonus = 1;
+    this.empoweredMeter = 0;
+    this.empoweredActiveLeft = 0;
     this.activeStormFx = new Set();
     this.auraSfx = scene.sound.add("sfx-fire-storm", { volume: AURA_SFX_VOLUME, loop: false });
     this.auraSfxFadeTween = null;
@@ -73,6 +78,13 @@ export class CombatSystem {
       }
     }
 
+    if (this.empoweredActiveLeft > 0) {
+      this.empoweredActiveLeft = Math.max(0, this.empoweredActiveLeft - deltaMs);
+      if (this.empoweredActiveLeft <= 0) {
+        EventBus.emit("world-hint", "The inner flame recedes.");
+      }
+    }
+
     this.handleEnemyAuraPressure();
     this.emitAuraUpdated();
 
@@ -96,7 +108,7 @@ export class CombatSystem {
     }
     this.auraSfx?.setVolume(AURA_SFX_VOLUME);
     this.auraSfx?.play();
-    EventBus.emit("world-hint", "Fire storm unleashed");
+    EventBus.emit("world-hint", this.empoweredActiveLeft > 0 ? "Empowered fire storm unleashed" : "Fire storm unleashed");
     this.emitAuraUpdated();
   }
 
@@ -280,8 +292,9 @@ export class CombatSystem {
       }
 
       const stormDamage = enemy.enemyType === "angel" ? FIRE_STORM_DAMAGE_ANGEL : FIRE_STORM_DAMAGE;
+      const empoweredMultiplier = this.empoweredActiveLeft > 0 ? EMPOWERED_FIRE_STORM_DAMAGE_MULTIPLIER : 1;
       const dead = enemy.takeDamage(
-        Math.round(stormDamage * this.auraDamageMultiplier * this.permanentFireStormBonus),
+        Math.round(stormDamage * this.auraDamageMultiplier * this.permanentFireStormBonus * empoweredMultiplier),
         hitDir
       );
       if (dead) {
@@ -397,7 +410,10 @@ export class CombatSystem {
       state,
       charge,
       cooldownLeftMs: this.auraCooldownLeft,
-      activeLeftMs: this.auraActiveLeft
+      activeLeftMs: this.auraActiveLeft,
+      empoweredCharge: Phaser.Math.Clamp(this.empoweredMeter / EMPOWERED_KILL_METER_MAX, 0, 1),
+      empoweredActive: this.empoweredActiveLeft > 0,
+      empoweredLeftMs: this.empoweredActiveLeft
     });
   }
 
@@ -417,6 +433,21 @@ export class CombatSystem {
     if (this.auraActiveLeft > 0) return;
     const deltaMs = Math.round(FIRE_STORM_COOLDOWN_MS * Phaser.Math.Clamp(chargeDelta, 0, 1));
     this.auraCooldownLeft = Math.max(0, this.auraCooldownLeft - deltaMs);
+    this.emitAuraUpdated();
+  }
+
+  grantEmpoweredMeter(amount = 0) {
+    if (this.empoweredActiveLeft > 0) return;
+    const clamped = Phaser.Math.Clamp(amount, 0, EMPOWERED_KILL_METER_MAX);
+    if (clamped <= 0) return;
+    this.empoweredMeter = Phaser.Math.Clamp(this.empoweredMeter + clamped, 0, EMPOWERED_KILL_METER_MAX);
+    if (this.empoweredMeter >= EMPOWERED_KILL_METER_MAX) {
+      this.empoweredMeter = 0;
+      this.empoweredActiveLeft = EMPOWERED_FIRE_STORM_DURATION_MS;
+      this.scene.cameras.main.flash(180, 255, 180, 90, false);
+      this.scene.cameras.main.shake(120, 0.0035);
+      EventBus.emit("world-hint", "The inner flame awakens.");
+    }
     this.emitAuraUpdated();
   }
 

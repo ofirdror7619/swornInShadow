@@ -115,6 +115,44 @@ const CHOICES = {
       corruptionDelta: -4,
       effect: "resist_streak"
     }
+  },
+  reliquary_room: {
+    id: "reliquary_room_choice",
+    title: "Reliquary Hunger",
+    prompt: "The sealed reliquary remembers blood. Feed it, or hold your will intact.",
+    left: {
+      id: "embrace",
+      label: "Feed The Flame",
+      description: "Recharge Fire Storm and gain speed, but call an ambush. +8 corruption.",
+      corruptionDelta: 8,
+      effect: "embrace_reliquary"
+    },
+    right: {
+      id: "resist",
+      label: "Hold Fast",
+      description: "Restore a little vital and quiet the Whisper. -4 corruption.",
+      corruptionDelta: -4,
+      effect: "resist_reliquary"
+    }
+  },
+  sanctum_room: {
+    id: "sanctum_room_choice",
+    title: "Ashen Coronation",
+    prompt: "Beyond this gate waits a crown of ruin. Kneel to it, or sharpen yourself against it.",
+    left: {
+      id: "embrace",
+      label: "Take The Crown",
+      description: "Permanently strengthen Fire Storm and enter empowered. +12 corruption.",
+      corruptionDelta: 12,
+      effect: "embrace_sanctum"
+    },
+    right: {
+      id: "resist",
+      label: "Stand Alone",
+      description: "Recover vital and steady your heart. -5 corruption.",
+      corruptionDelta: -5,
+      effect: "resist_sanctum"
+    }
   }
 };
 
@@ -260,10 +298,10 @@ export class DemonAgent {
 
   maybeOfferChoice(reason, now) {
     if (this.narrationLocked) return;
-    if (this.pendingChoice || this.pendingOffer) return;
-    if (now - this.lastChoiceAt < CHOICE_COOLDOWN_MS) return;
+    if (this.pendingChoice || this.pendingOffer) return false;
+    if (now - this.lastChoiceAt < CHOICE_COOLDOWN_MS) return false;
     const template = CHOICES[reason];
-    if (!template) return;
+    if (!template) return false;
     const choice = {
       ...template,
       left: { ...template.left },
@@ -273,6 +311,7 @@ export class DemonAgent {
     this.lastChoiceAt = now;
     this.onChoice?.(choice);
     this.maybeWhisper("offer_power", now, { force: true });
+    return true;
   }
 
   updateStateFromEvent(event, now, payload) {
