@@ -34,7 +34,7 @@ const ROOM_CHEST_ID = "main-chest";
 const MISSION_CHEST_ROOM_ID = "crypt";
 const MISSION_CHEST_ID = "mission-1-huge-chest";
 const MISSION_CHEST_TEXTURE_KEY = "huge-chest";
-const MISSION_CHEST_SCALE = 0.34;
+const MISSION_CHEST_SCALE = 0.3;
 const MISSION_CHEST_ORIGIN_Y = 1;
 const MISSION_CHEST_SINK_Y = 62;
 const SLICE_TRIGGER_ALPHA = 0.001;
@@ -67,6 +67,9 @@ const BG_CEILING_SCROLL_FACTOR = 0.62;
 const BG_CEILING_SCALE_MULTIPLIER = 0.6;
 const BG_CEILING_TILT_DEGREES = 0.9;
 const BG_CEILING_TILT_MS = 3400;
+const ATMOSPHERE_BACK_DEPTH = 250;
+const ATMOSPHERE_GLOW_DEPTH = 252;
+const COLOR_GRADE_DEPTH = 1800;
 const WORLD_DEPTH_BASE = 300;
 const PLATFORM_DEPTH = 460;
 const ROOM_GATE_DEPTH = 620;
@@ -144,6 +147,7 @@ export class RoomManager {
     this.corruptionBlocks = this.scene.physics.add.staticGroup();
     this.corruptionVisuals = this.scene.add.group();
     this.sliceTriggers = this.scene.physics.add.staticGroup();
+    this.roomExitTriggers = this.scene.physics.add.staticGroup();
     this.treasureChests = this.scene.physics.add.staticGroup();
     this.enemies = this.scene.physics.add.group({
       classType: EnemyAngel,
@@ -153,6 +157,8 @@ export class RoomManager {
     this.backgroundLayer2 = null;
     this.ceilingLayer = null;
     this.ceilingTiltTween = null;
+    this.atmosphereFx = [];
+    this.colorGradeOverlay = null;
     this.isTransitioning = false;
     this.corruption = 0;
     this.corruptionTier = 0;
@@ -189,6 +195,7 @@ export class RoomManager {
       (ROOM_DIMENSIONS.width / Math.max(1, this.ceilingLayer.width)) * BG_CEILING_SCALE_MULTIPLIER
     );
     this.startCeilingAmbientMotion();
+    this.createAtmosphereFx(room);
 
     const isLevel2 = (GameState.currentLevel ?? 1) >= 2;
     if (isLevel2) {
@@ -456,6 +463,7 @@ export class RoomManager {
   clearRoom() {
     this.ceilingTiltTween?.stop();
     this.ceilingTiltTween = null;
+    this.clearAtmosphereFx();
     this.backgroundLayer1?.destroy();
     this.backgroundLayer2?.destroy();
     this.ceilingLayer?.destroy();
@@ -469,6 +477,7 @@ export class RoomManager {
     this.platforms?.clear(true, true);
     this.gates?.clear(true, true);
     this.sliceTriggers?.clear(true, true);
+    this.roomExitTriggers?.clear(true, true);
     this.treasureChests?.clear(true, true);
     this.enemies?.clear(true, true);
   }
@@ -523,6 +532,8 @@ export class RoomManager {
       }
       enemy.syncAuraDepth?.(enemyDepth);
     });
+
+    this.updateAtmosphereRuntime();
   }
 
   shouldSpawnSliceTrigger(kind) {
@@ -550,6 +561,167 @@ export class RoomManager {
       yoyo: true,
       repeat: -1
     });
+  }
+
+  createAtmosphereFx(room) {
+    const emberField = this.scene.add.particles(0, 0, "fx-ember", {
+      lifespan: { min: 1500, max: 2800 },
+      frequency: 24,
+      quantity: 1,
+      speedX: { min: -10, max: 10 },
+      speedY: { min: -42, max: -14 },
+      scale: { start: 0.52, end: 0 },
+      alpha: { start: 0.3, end: 0 },
+      tint: [0xff6c34, 0xff9d57, 0xffd49b],
+      blendMode: "ADD",
+      emitZone: {
+        source: new Phaser.Geom.Rectangle(16, 160, ROOM_DIMENSIONS.width - 32, ROOM_DIMENSIONS.height - 220),
+        type: "random"
+      }
+    });
+    emberField.setDepth(ATMOSPHERE_BACK_DEPTH);
+    this.trackAtmosphereFx(emberField);
+
+    const smokeField = this.scene.add.particles(0, 0, "fx-smoke", {
+      lifespan: { min: 2600, max: 4400 },
+      frequency: 110,
+      quantity: 1,
+      speedX: { min: -10, max: 10 },
+      speedY: { min: -22, max: -6 },
+      scale: { start: 0.9, end: 2.15 },
+      alpha: { start: 0.12, end: 0 },
+      tint: [0x1d1416, 0x271b1d, 0x312123],
+      emitZone: {
+        source: new Phaser.Geom.Rectangle(0, 220, ROOM_DIMENSIONS.width, ROOM_DIMENSIONS.height - 220),
+        type: "random"
+      }
+    });
+    smokeField.setDepth(ATMOSPHERE_BACK_DEPTH - 2);
+    this.trackAtmosphereFx(smokeField);
+
+    this.createLampGlowField();
+    this.createHeatFromPlatforms(room);
+    this.createColorGradingOverlay();
+  }
+
+  createLampGlowField() {
+    const lampCount = 5;
+    for (let i = 0; i < lampCount; i += 1) {
+      const x = ((i + 1) * ROOM_DIMENSIONS.width) / (lampCount + 1);
+      const y = 162 + Math.sin(i * 1.6) * 14;
+
+      const glow = this.scene.add.image(x, y, "fx-gold");
+      glow.setDepth(ATMOSPHERE_GLOW_DEPTH);
+      glow.setScale(5.8);
+      glow.setTint(0xffa25d);
+      glow.setBlendMode("ADD");
+      glow.setAlpha(0.18);
+      this.trackAtmosphereFx(glow);
+
+      const halo = this.scene.add.circle(x, y + 8, 92, 0xff8e48, 0.12);
+      halo.setDepth(ATMOSPHERE_GLOW_DEPTH - 1);
+      halo.setBlendMode("ADD");
+      this.trackAtmosphereFx(halo);
+
+      this.scene.tweens.add({
+        targets: [glow, halo],
+        alpha: { from: 0.1, to: 0.24 },
+        scale: { from: 0.96, to: 1.1 },
+        duration: Phaser.Math.Between(760, 1280),
+        ease: "Sine.easeInOut",
+        yoyo: true,
+        repeat: -1,
+        delay: Phaser.Math.Between(0, 240)
+      });
+    }
+  }
+
+  createHeatFromPlatforms(room) {
+    for (const platform of room.platforms ?? []) {
+      if (!platform || platform.y < 520) continue;
+
+      const width = Math.min(320, platform.width * 0.84);
+      const glow = this.scene.add.ellipse(platform.x, platform.y - platform.height * 0.62, width, 84, 0xff7a40, 0.06);
+      glow.setDepth(PLATFORM_DEPTH - 3);
+      glow.setBlendMode("ADD");
+      this.trackAtmosphereFx(glow);
+
+      this.scene.tweens.add({
+        targets: glow,
+        alpha: { from: 0.04, to: 0.1 },
+        scaleX: { from: 0.96, to: 1.05 },
+        scaleY: { from: 0.92, to: 1.06 },
+        duration: Phaser.Math.Between(800, 1300),
+        ease: "Sine.easeInOut",
+        yoyo: true,
+        repeat: -1
+      });
+
+      const smoke = this.scene.add.particles(0, 0, "fx-smoke", {
+        lifespan: { min: 1100, max: 1900 },
+        frequency: 48,
+        quantity: 1,
+        speedX: { min: -10, max: 10 },
+        speedY: { min: -48, max: -20 },
+        scale: { start: 0.38, end: 1.08 },
+        alpha: { start: 0.16, end: 0 },
+        tint: [0x281717, 0x342122],
+        emitZone: {
+          source: new Phaser.Geom.Rectangle(
+            platform.x - platform.width * 0.38,
+            platform.y - platform.height * 0.5,
+            platform.width * 0.76,
+            6
+          ),
+          type: "random"
+        }
+      });
+      smoke.setDepth(PLATFORM_DEPTH + 2);
+      this.trackAtmosphereFx(smoke);
+    }
+  }
+
+  createColorGradingOverlay() {
+    const w = this.scene.scale.width;
+    const h = this.scene.scale.height;
+
+    const vignette = this.scene.add.rectangle(w * 0.5, h * 0.5, w, h, 0x120709, 0.22);
+    vignette.setScrollFactor(0);
+    vignette.setDepth(COLOR_GRADE_DEPTH);
+    this.trackAtmosphereFx(vignette);
+
+    const warmCore = this.scene.add.circle(
+      this.player?.x ?? ROOM_DIMENSIONS.width * 0.5,
+      (this.player?.y ?? ROOM_DIMENSIONS.height * 0.5) + 8,
+      Math.max(235, Math.min(w, h) * 0.33),
+      0xff8f52,
+      0.1
+    );
+    warmCore.setDepth(ATMOSPHERE_GLOW_DEPTH + 1);
+    warmCore.setBlendMode("ADD");
+    this.trackAtmosphereFx(warmCore);
+
+    this.colorGradeOverlay = { vignette, warmCore };
+  }
+
+  updateAtmosphereRuntime() {
+    if (!this.colorGradeOverlay?.warmCore?.active || !this.player?.active) return;
+
+    this.colorGradeOverlay.warmCore.setPosition(this.player.x, this.player.y + 8);
+    this.colorGradeOverlay.warmCore.setDepth(Math.max(ATMOSPHERE_GLOW_DEPTH + 1, this.depthForY(this.player.y, -18)));
+  }
+
+  trackAtmosphereFx(displayObject) {
+    if (!displayObject) return;
+    this.atmosphereFx.push(displayObject);
+  }
+
+  clearAtmosphereFx() {
+    for (const fx of this.atmosphereFx) {
+      fx?.destroy?.();
+    }
+    this.atmosphereFx = [];
+    this.colorGradeOverlay = null;
   }
 
   spawnRelicDrop(x, y) {
@@ -783,18 +955,19 @@ export class RoomManager {
 
   updateRoomTransitions() {
     if (this.isTransitioning) return;
-    const room = ROOMS[GameState.currentRoomId];
-    const playerBody = this.player?.body;
-    const playerRight = playerBody?.right ?? this.player.x;
-    const playerLeft = playerBody?.left ?? this.player.x;
-    const rightGateTriggerX =
-      ROOM_DIMENSIONS.width - ROOM_GATE_MARGIN_X - ROOM_GATE_WIDTH * ROOM_EXIT_TRIGGER_DEPTH_RATIO;
-    const leftGateTriggerX = ROOM_GATE_MARGIN_X + ROOM_GATE_WIDTH * ROOM_EXIT_TRIGGER_DEPTH_RATIO;
+    const playerBounds = this.player?.getBounds?.();
+    if (!playerBounds) return;
 
-    if (room.exits.right && playerRight >= rightGateTriggerX) {
-      this.tryTransition(room.exits.right);
-    } else if (room.exits.left && playerLeft <= leftGateTriggerX) {
-      this.tryTransition(room.exits.left);
+    let triggeredExit = null;
+    this.roomExitTriggers?.children?.iterate((trigger) => {
+      if (triggeredExit || !trigger?.active || !trigger.exitDef) return;
+      const overlaps = Phaser.Geom.Intersects.RectangleToRectangle(playerBounds, trigger.getBounds());
+      if (!overlaps) return;
+      triggeredExit = trigger.exitDef;
+    });
+
+    if (triggeredExit) {
+      this.tryTransition(triggeredExit);
     }
   }
 
@@ -984,7 +1157,7 @@ export class RoomManager {
       this.spawnAnimatedRoomGate(ROOM_GATE_MARGIN_X, ROOM_DIMENSIONS.height - ROOM_GATE_MARGIN_Y, {
         originX: 0,
         flipX: true
-      });
+      }, room.exits.left);
     }
 
     if (room.exits.right) {
@@ -994,12 +1167,13 @@ export class RoomManager {
         {
           originX: 1,
           flipX: false
-        }
+        },
+        room.exits.right
       );
     }
   }
 
-  spawnAnimatedRoomGate(x, y, options = {}) {
+  spawnAnimatedRoomGate(x, y, options = {}, exitDef = null) {
     const originX = options.originX ?? 0.5;
     const flipX = Boolean(options.flipX);
     const gateCenterX = x + (0.5 - originX) * ROOM_GATE_WIDTH;
@@ -1041,5 +1215,14 @@ export class RoomManager {
       ease: "Linear",
       repeat: -1
     });
+
+    if (!exitDef) return;
+    const trigger = this.roomExitTriggers.create(portalCenterX, portalCenterY, "gate");
+    trigger.displayWidth = portalMaskW * 0.82;
+    trigger.displayHeight = portalMaskH * 0.86;
+    trigger.setAlpha(0.001);
+    trigger.setVisible(false);
+    trigger.exitDef = exitDef;
+    trigger.refreshBody();
   }
 }

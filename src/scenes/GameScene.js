@@ -369,11 +369,19 @@ export class GameScene extends Phaser.Scene {
     this.handleSliceExitSpawned = (payload) => {
       this.emitSliceHudState(payload?.roomId ?? GameState.currentRoomId);
     };
+    this.handleMissionCompleteConfirmed = () => {
+      if ((GameState.currentLevel ?? 1) === 1) {
+        this.startLevel2();
+      } else {
+        this.endLevel1();
+      }
+    };
     this.handleSliceFinished = (payload) => {
       this.runCompletedAt = this.time.now;
       this.killCombo = 0;
       this.comboExpiresAt = 0;
-      const missionCleared = payload?.triggerId === "level-exit" || payload?.triggerId === "mission-1-chest";
+      const triggerId = payload?.triggerId;
+      const missionCleared = triggerId === "level-exit" || triggerId === "mission-1-chest";
       if (missionCleared && (GameState.currentLevel ?? 1) === 1) {
         this.showHint("Level 1 complete. Descending to Level 2...");
       } else {
@@ -383,6 +391,14 @@ export class GameScene extends Phaser.Scene {
         this.demonAgent.onEvent("secret_found", this.time.now);
       }
       this.emitSliceHudState();
+      if (triggerId === "mission-1-chest") {
+        EventBus.emit("mission-complete", {
+          title: "MISSION COMPLETED",
+          body: "The reliquary yielded. A hidden fire stirs beneath your ribs.",
+          confirmText: "Press Enter to feel the inner flame."
+        });
+        return;
+      }
       if (missionCleared) {
         if ((GameState.currentLevel ?? 1) === 1) {
           this.startLevel2();
@@ -396,6 +412,7 @@ export class GameScene extends Phaser.Scene {
     EventBus.on("slice-checkpoint-activated", this.handleSliceCheckpoint, this);
     EventBus.on("slice-exit-spawned", this.handleSliceExitSpawned, this);
     EventBus.on("slice-finished", this.handleSliceFinished, this);
+    EventBus.on("mission-complete-confirmed", this.handleMissionCompleteConfirmed, this);
   }
 
   unregisterDemonHooks() {
@@ -418,6 +435,7 @@ export class GameScene extends Phaser.Scene {
     EventBus.off("slice-checkpoint-activated", this.handleSliceCheckpoint, this);
     EventBus.off("slice-exit-spawned", this.handleSliceExitSpawned, this);
     EventBus.off("slice-finished", this.handleSliceFinished, this);
+    EventBus.off("mission-complete-confirmed", this.handleMissionCompleteConfirmed, this);
   }
 
   applyDealEffect(deal) {

@@ -96,7 +96,9 @@ export class UIScene extends Phaser.Scene {
     this.handleWhisperDirectiveActive = (payload) => this.onWhisperDirectiveActive(payload);
     this.handleWhisperDirectiveCleared = () => this.clearWhisperDirectiveUi();
     this.handlePlayerDiedHud = (payload) => this.showDeathWindow(payload);
+    this.handleMissionCompletedHud = (payload) => this.showMissionCompleteWindow(payload);
     this.deathAwaitingConfirm = false;
+    this.missionCompleteAwaitingConfirm = false;
     this.modalPausedGame = false;
     this.killCombo = 0;
     this.threatTier = 1;
@@ -135,6 +137,7 @@ export class UIScene extends Phaser.Scene {
     EventBus.on("whisper-directive-active", this.handleWhisperDirectiveActive, this);
     EventBus.on("whisper-directive-cleared", this.handleWhisperDirectiveCleared, this);
     EventBus.on("player-died", this.handlePlayerDiedHud, this);
+    EventBus.on("mission-complete", this.handleMissionCompletedHud, this);
     this.events.on("shutdown", this.cleanup, this);
 
     this.refresh();
@@ -366,9 +369,9 @@ export class UIScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(HUD_Z + 41);
     this.deathTitle = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 38, "THE ABYSS\nHAS CLAIMED YOU", {
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 46, "THE ABYSS\nHAS CLAIMED YOU", {
         fontFamily: "'Simbiot', serif",
-        fontSize: "22px",
+        fontSize: "26px",
         color: "#de3d3d",
         stroke: "#1a0000",
         strokeThickness: 3,
@@ -386,7 +389,7 @@ export class UIScene extends Phaser.Scene {
     this.deathSubtext = this.add
       .text(this.scale.width * 0.5, this.scale.height * 0.5 + 24, "Rise again where blood was spilled.", {
         fontFamily: HUD_FONT,
-        fontSize: "16px",
+        fontSize: "24px",
         color: "#e6b8b8",
         stroke: "#160000",
         strokeThickness: 2,
@@ -399,11 +402,78 @@ export class UIScene extends Phaser.Scene {
       .setDepth(HUD_Z + 42)
       .setResolution(2);
     this.deathConfirmText = this.add
-      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 64, "Press Enter to rise.", {
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 76, "Press Enter to rise.", {
         fontFamily: HUD_FONT,
-        fontSize: "14px",
+        fontSize: "22px",
         color: "#f2d0d0",
         stroke: "#140000",
+        strokeThickness: 2,
+        align: "center"
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.missionCompleteBackdrop = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, 0x040000)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 40);
+    this.missionCompletePanel = this.add
+      .rectangle(this.scale.width * 0.5, this.scale.height * 0.5, 700, 240, 0x090201)
+      .setStrokeStyle(2, 0xc46d2b, 0.96)
+      .setAlpha(0)
+      .setScale(0.94)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 41);
+    this.missionCompleteTitle = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 - 54, "MISSION COMPLETED", {
+        fontFamily: "'Simbiot', serif",
+        fontSize: "28px",
+        color: "#f4b56a",
+        stroke: "#241008",
+        strokeThickness: 3,
+        align: "center",
+        wordWrap: { width: 600 }
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.missionCompleteTitle.setShadow(0, 3, "#120704", 10, true, true);
+    this.missionCompleteSubtext = this.add
+      .text(
+        this.scale.width * 0.5,
+        this.scale.height * 0.5 + 12,
+        "The reliquary yielded. A hidden fire stirs beneath your ribs.",
+        {
+          fontFamily: HUD_FONT,
+          fontSize: "24px",
+          color: "#f0d2b1",
+          stroke: "#1a0804",
+          strokeThickness: 2,
+          align: "center",
+          wordWrap: { width: 600 }
+        }
+      )
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setVisible(false)
+      .setScrollFactor(0)
+      .setDepth(HUD_Z + 42)
+      .setResolution(2);
+    this.missionCompleteConfirmText = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5 + 84, "Press Enter to feel the inner flame.", {
+        fontFamily: HUD_FONT,
+        fontSize: "22px",
+        color: "#ffdcb8",
+        stroke: "#180804",
         strokeThickness: 2,
         align: "center"
       })
@@ -472,41 +542,6 @@ export class UIScene extends Phaser.Scene {
       .setResolution(2)
       .setVisible(false);
 
-    this.sliceDangerText = this.add
-      .text(this.scale.width - 12, 10, "DANGER: LOW", {
-        fontFamily: HUD_FONT,
-        fontSize: "15px",
-        color: "#d8b5b0"
-      })
-      .setOrigin(1, 0)
-      .setScrollFactor(0)
-      .setDepth(HUD_Z + 8)
-      .setResolution(2);
-    this.sliceDangerText.setLetterSpacing(1.2);
-
-    this.sliceComboText = this.add
-      .text(this.scale.width - 12, 28, "COMBO: x0", {
-        fontFamily: HUD_FONT,
-        fontSize: "15px",
-        color: "#d9c2a6"
-      })
-      .setOrigin(1, 0)
-      .setScrollFactor(0)
-      .setDepth(HUD_Z + 8)
-      .setResolution(2);
-    this.sliceComboText.setLetterSpacing(1.2);
-
-    this.sliceThreatText = this.add
-      .text(this.scale.width - 12, 46, "THREAT TIER: 1 | WAVE: --.-s", {
-        fontFamily: HUD_FONT,
-        fontSize: "15px",
-        color: "#d9c2a6"
-      })
-      .setOrigin(1, 0)
-      .setScrollFactor(0)
-      .setDepth(HUD_Z + 8)
-      .setResolution(2);
-    this.sliceThreatText.setLetterSpacing(1.2);
   }
 
   createDemonLayer() {
@@ -732,20 +767,21 @@ export class UIScene extends Phaser.Scene {
     this.directiveStatusText = this.add
       .text(12, this.scale.height - 4, "", {
         fontFamily: HUD_ACCENT_FONT,
-        fontSize: "10px",
-        color: "#ffc6b8",
+        fontSize: "24px",
+        color: "#ffd0c6",
         stroke: "#180909",
-        strokeThickness: 1,
+        strokeThickness: 2,
         backgroundColor: "#120808d9",
-        padding: { x: 7, y: 4 },
+        padding: { x: 10, y: 5 },
         align: "left"
       })
       .setOrigin(0, 1)
-      .setWordWrapWidth(300, true)
+      .setWordWrapWidth(520, true)
       .setVisible(false)
       .setScrollFactor(0)
       .setDepth(HUD_Z + 22)
       .setResolution(2);
+    this.directiveStatusText.setLetterSpacing(0.8);
   }
 
   refresh() {
@@ -994,6 +1030,63 @@ export class UIScene extends Phaser.Scene {
     this.updateGamePauseState();
   }
 
+  showMissionCompleteWindow(payload = {}) {
+    if (
+      !this.missionCompleteBackdrop ||
+      !this.missionCompletePanel ||
+      !this.missionCompleteTitle ||
+      !this.missionCompleteSubtext
+    ) {
+      return;
+    }
+    this.tweens.killTweensOf([
+      this.missionCompleteBackdrop,
+      this.missionCompletePanel,
+      this.missionCompleteTitle,
+      this.missionCompleteSubtext,
+      this.missionCompleteConfirmText
+    ]);
+    this.missionCompleteTitle.setText(payload?.title ?? "MISSION COMPLETED");
+    this.missionCompleteSubtext.setText(
+      payload?.body ?? "The reliquary yielded. A hidden fire stirs beneath your ribs."
+    );
+    this.missionCompleteConfirmText.setText(
+      payload?.confirmText ?? "Press Enter to feel the inner flame."
+    );
+    this.missionCompleteAwaitingConfirm = true;
+
+    this.missionCompleteBackdrop.setVisible(true).setAlpha(0);
+    this.missionCompletePanel.setVisible(true).setAlpha(0).setScale(0.94);
+    this.missionCompleteTitle.setVisible(true).setAlpha(0).setScale(0.95);
+    this.missionCompleteSubtext.setVisible(true).setAlpha(0);
+    this.missionCompleteConfirmText.setVisible(true).setAlpha(0);
+
+    this.tweens.add({
+      targets: this.missionCompleteBackdrop,
+      alpha: 0.58,
+      duration: 170,
+      ease: "Quad.easeOut"
+    });
+    this.tweens.add({
+      targets: [
+        this.missionCompletePanel,
+        this.missionCompleteTitle,
+        this.missionCompleteSubtext,
+        this.missionCompleteConfirmText
+      ],
+      alpha: 1,
+      duration: 220,
+      ease: "Sine.easeOut"
+    });
+    this.tweens.add({
+      targets: [this.missionCompletePanel, this.missionCompleteTitle],
+      scale: 1,
+      duration: 260,
+      ease: "Back.easeOut"
+    });
+    this.updateGamePauseState();
+  }
+
   hideDeathWindow() {
     if (!this.deathAwaitingConfirm) return;
     this.deathAwaitingConfirm = false;
@@ -1013,25 +1106,37 @@ export class UIScene extends Phaser.Scene {
     this.updateGamePauseState();
   }
 
+  hideMissionCompleteWindow() {
+    if (!this.missionCompleteAwaitingConfirm) return;
+    this.missionCompleteAwaitingConfirm = false;
+    this.tweens.add({
+      targets: [
+        this.missionCompleteBackdrop,
+        this.missionCompletePanel,
+        this.missionCompleteTitle,
+        this.missionCompleteSubtext,
+        this.missionCompleteConfirmText
+      ],
+      alpha: 0,
+      duration: 220,
+      ease: "Sine.easeIn",
+      onComplete: () => {
+        this.missionCompleteBackdrop?.setVisible(false);
+        this.missionCompletePanel?.setVisible(false);
+        this.missionCompleteTitle?.setVisible(false);
+        this.missionCompleteSubtext?.setVisible(false);
+        this.missionCompleteConfirmText?.setVisible(false);
+        EventBus.emit("mission-complete-confirmed");
+      }
+    });
+    this.updateGamePauseState();
+  }
+
   onDemonStateUpdated(state) {
     this.corruption = Phaser.Math.Clamp(state?.corruption ?? 0, 0, 100);
     this.dominance = Phaser.Math.Clamp(state?.dominance ?? 0, 0, 4);
     this.whisperVoice?.setDominance(this.dominance);
 
-    let danger = "LOW";
-    let color = "#d8b5b0";
-    if (this.dominance >= 3 || this.corruption >= 75) {
-      danger = "EXTREME";
-      color = "#ff8f7d";
-    } else if (this.dominance >= 2 || this.corruption >= 50) {
-      danger = "HIGH";
-      color = "#ffb084";
-    } else if (this.dominance >= 1 || this.corruption >= 25) {
-      danger = "ELEVATED";
-      color = "#f0bf86";
-    }
-    this.sliceDangerText?.setText(`DANGER: ${danger}`);
-    this.sliceDangerText?.setColor(color);
   }
 
   onSliceObjectiveUpdated(payload) {
@@ -1115,19 +1220,6 @@ export class UIScene extends Phaser.Scene {
     this.threatTier = Math.max(1, payload?.threatTier ?? 1);
     this.nextAmbushMs = Math.max(0, payload?.nextAmbushMs ?? 0);
     this.enemiesDefeated = Math.max(0, payload?.enemiesDefeated ?? 0);
-
-    const comboLeftSec = ((payload?.comboLeftMs ?? 0) / 1000).toFixed(1);
-    if (this.killCombo > 1) {
-      this.sliceComboText?.setText(`COMBO: x${this.killCombo} (${comboLeftSec}s)`);
-      this.sliceComboText?.setColor("#ffc27b");
-    } else {
-      this.sliceComboText?.setText("COMBO: x0");
-      this.sliceComboText?.setColor("#d9c2a6");
-    }
-
-    const waveSec = (this.nextAmbushMs / 1000).toFixed(1);
-    this.sliceThreatText?.setText(`THREAT TIER: ${this.threatTier} | WAVE: ${waveSec}s`);
-    this.sliceThreatText?.setColor(this.threatTier >= 4 ? "#ff9f85" : this.threatTier >= 3 ? "#ffbb94" : "#d9c2a6");
   }
 
   onAbilityUnlocked(ability) {
@@ -1348,7 +1440,11 @@ export class UIScene extends Phaser.Scene {
 
   updateGamePauseState() {
     const shouldPauseGame = Boolean(
-      this.deathAwaitingConfirm || this.activeOffer || this.activeDirectiveOffer || this.activeChoice
+      this.deathAwaitingConfirm ||
+        this.missionCompleteAwaitingConfirm ||
+        this.activeOffer ||
+        this.activeDirectiveOffer ||
+        this.activeChoice
     );
     if (shouldPauseGame === this.modalPausedGame) return;
     this.modalPausedGame = shouldPauseGame;
@@ -1522,6 +1618,8 @@ export class UIScene extends Phaser.Scene {
     }
     if (this.deathAwaitingConfirm && Phaser.Input.Keyboard.JustDown(this.deathConfirmKey)) {
       this.hideDeathWindow();
+    } else if (this.missionCompleteAwaitingConfirm && Phaser.Input.Keyboard.JustDown(this.deathConfirmKey)) {
+      this.hideMissionCompleteWindow();
     }
   }
 
@@ -1547,6 +1645,7 @@ export class UIScene extends Phaser.Scene {
     EventBus.off("whisper-directive-active", this.handleWhisperDirectiveActive, this);
     EventBus.off("whisper-directive-cleared", this.handleWhisperDirectiveCleared, this);
     EventBus.off("player-died", this.handlePlayerDiedHud, this);
+    EventBus.off("mission-complete", this.handleMissionCompletedHud, this);
     this.whisperVoice?.destroy();
     this.whisperVoice = null;
     this.healthFlame?.destroy();
@@ -1559,12 +1658,7 @@ export class UIScene extends Phaser.Scene {
 
   setWhisperHudVisible(visible, animate = false) {
     const alpha = visible ? 1 : 0;
-    const targets = [
-      this.corruptionLabel,
-      this.sliceDangerText,
-      this.sliceComboText,
-      this.sliceThreatText
-    ].filter(Boolean);
+    const targets = [this.corruptionLabel].filter(Boolean);
     this.corruptionTrack?.setAlpha(alpha);
     this.corruptionFill?.setAlpha(alpha);
     targets.forEach((target) => {
