@@ -201,7 +201,7 @@ export class GameScene extends Phaser.Scene {
       this.demonAgent.onEvent("room_entered", this.time.now, { roomId: GameState.currentRoomId });
     }
     this.emitSliceHudState();
-    this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
+    this.nextAmbushAt = Infinity;
     this.emitGameplayLoopHud();
     this.emitAskWhisperAvailability(true);
 
@@ -477,13 +477,11 @@ export class GameScene extends Phaser.Scene {
     if (effect === "embrace_gate") {
       this.auraBoostUntil = this.time.now + 12000;
       this.moveBoostUntil = this.time.now + 8000;
-      this.triggerAmbushWave("whisper-embrace");
       EventBus.emit("world-hint", "Whisper pact sealed. Power floods your veins.");
       return;
     }
     if (effect === "resist_gate") {
-      this.roomManager.spawnAmbushPack(Math.max(1, this.threatTier), "whisper-resist");
-      EventBus.emit("world-hint", "You resisted. The world lashes back.");
+      EventBus.emit("world-hint", "You resisted. The world holds its breath.");
       return;
     }
     if (effect === "embrace_low_health") {
@@ -500,8 +498,7 @@ export class GameScene extends Phaser.Scene {
     if (effect === "embrace_streak") {
       this.moveBoostUntil = this.time.now + 9000;
       this.auraBoostUntil = this.time.now + 9000;
-      this.triggerAmbushWave("whisper-feast");
-      EventBus.emit("world-hint", "You fed the Whisper. The hunt escalates.");
+      EventBus.emit("world-hint", "You fed the Whisper. Your hunt burns hotter.");
       return;
     }
     if (effect === "resist_streak") {
@@ -516,7 +513,6 @@ export class GameScene extends Phaser.Scene {
     if (effect === "embrace_reliquary") {
       this.combat?.grantAuraCharge(0.55);
       this.moveBoostUntil = Math.max(this.moveBoostUntil, this.time.now + 9000);
-      this.triggerAmbushWave("whisper-reliquary");
       EventBus.emit("world-hint", "The reliquary drinks deeply. Fire answers.");
       return;
     }
@@ -946,19 +942,12 @@ export class GameScene extends Phaser.Scene {
     );
     if (expectedTier > this.threatTier) {
       this.threatTier = expectedTier;
-      this.showHint(`Threat rising: Tier ${this.threatTier}`);
+      this.showHint(`Momentum rising: Tier ${this.threatTier}`);
     }
     this.emitGameplayLoopHud();
 
     if (this.killCombo >= 5 && this.isWhisperInteractive()) {
       this.demonAgent.onEvent("kill_streak", now);
-    }
-    if (this.killCombo >= 6 && now + 500 > this.nextAmbushAt) {
-      this.triggerAmbushWave("combo");
-    }
-
-    if (payload?.enemyType === "angel" && this.threatTier >= 2 && Math.random() < 0.45) {
-      this.triggerAmbushWave("angel-fall");
     }
   }
 
@@ -969,27 +958,12 @@ export class GameScene extends Phaser.Scene {
       this.killCombo = 0;
       this.emitGameplayLoopHud();
     }
-
-    if (now < this.nextAmbushAt) return;
-    const aliveEnemies = this.roomManager.getCurrentRoomEnemyCount();
-    const aliveCap = 3 + this.threatTier;
-    if (aliveEnemies < aliveCap) {
-      this.triggerAmbushWave("timer");
-      return;
-    }
-    this.nextAmbushAt = now + Math.round(this.getAmbushIntervalMs() * 0.6);
-    this.emitGameplayLoopHud();
   }
 
   triggerAmbushWave(source = "timer") {
-    if (GameState.slice?.completed || this.levelEnding) return;
-    const spawned = this.roomManager.spawnAmbushPack(this.threatTier, source);
-    this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
-    if (spawned > 0) {
-      const sourceText = source === "timer" ? "Shadows gather." : "Hostiles surge!";
-      this.showHint(`${sourceText} Ambush x${spawned}`);
-    }
+    this.nextAmbushAt = Infinity;
     this.emitGameplayLoopHud();
+    return 0;
   }
 
   getAmbushIntervalMs() {
@@ -1004,7 +978,7 @@ export class GameScene extends Phaser.Scene {
       comboLeftMs: Math.max(0, this.comboExpiresAt - this.time.now),
       enemiesDefeated: this.enemiesDefeated,
       threatTier: this.threatTier,
-      nextAmbushMs: Math.max(0, this.nextAmbushAt - this.time.now)
+      nextAmbushMs: 0
     });
   }
 
@@ -1088,7 +1062,7 @@ export class GameScene extends Phaser.Scene {
       this.comboExpiresAt = 0;
       this.enemiesDefeated = 0;
       this.threatTier = 2;
-      this.nextAmbushAt = this.time.now + this.getAmbushIntervalMs();
+      this.nextAmbushAt = Infinity;
 
       EventBus.emit("health-updated", GameState.health);
       this.roomManager.buildRoom(GameState.currentRoomId, GameState.playerSpawnKey);

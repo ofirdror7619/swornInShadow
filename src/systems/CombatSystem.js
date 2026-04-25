@@ -375,10 +375,11 @@ export class CombatSystem {
     this.scene.cameras.main.shake(100, 0.0035);
 
     if (GameState.health <= 0) {
-      const respawnTarget = {
-        roomId: GameState.currentRoomId,
-        spawnKey: GameState.playerSpawnKey ?? "spawn_center"
-      };
+      const respawnTarget =
+        this.roomManager.getRespawnTarget?.() ?? {
+          roomId: GameState.currentRoomId,
+          spawnKey: GameState.playerSpawnKey ?? "spawn_center"
+        };
       EventBus.emit("player-died", respawnTarget);
       EventBus.emit("world-hint", "Death takes you. The hunt continues.");
       GameState.health = GameState.maxHealth;

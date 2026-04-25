@@ -4,6 +4,7 @@ import { GameState } from "../core/GameState";
 import { EventBus } from "../core/EventBus";
 import { EnemyAngel } from "../entities/EnemyAngel";
 import { FallenSeraph } from "../entities/FallenSeraph";
+import { EnemyDemon } from "../entities/EnemyDemon";
 
 const BIG_PLATFORM_KEYS = ["platform-big-1", "platform-big-2"];
 const MEDIUM_PLATFORM_KEYS = ["platform-medium-1", "platform-medium-2", "platform-medium-3"];
@@ -94,7 +95,8 @@ const RELIC_DEPTH_OFFSET = 18;
 const CHEST_DEPTH_OFFSET = -12;
 const ENEMY_FACTORIES = {
   angel: EnemyAngel,
-  fallen_seraph: FallenSeraph
+  fallen_seraph: FallenSeraph,
+  demon: EnemyDemon
 };
 const AMBUSH_BASE_COUNT = 1;
 const AMBUSH_MAX_COUNT = 4;
@@ -412,45 +414,7 @@ export class RoomManager {
   }
 
   spawnAmbushPack(threatTier = 1, source = "surge") {
-    const room = ROOMS[GameState.currentRoomId];
-    if (!room) return 0;
-    if (room.allowRespawn !== true) return 0;
-    const platformDefs = (GameState.currentLevel ?? 1) >= 2 ? [this.getLevel2FloorDef()] : room.platforms ?? [];
-    if (platformDefs.length === 0) return 0;
-    const ambushProfile = this.getAmbushProfile(GameState.currentRoomId, threatTier);
-
-    const base = AMBUSH_BASE_COUNT + Math.floor((threatTier - 1) / 2);
-    const spawnCount = Phaser.Math.Clamp(base, AMBUSH_BASE_COUNT, AMBUSH_MAX_COUNT);
-    let spawned = 0;
-
-    for (let i = 0; i < spawnCount; i += 1) {
-      const point = this.findAmbushSpawnPoint(platformDefs);
-      if (!point) continue;
-      const patrolHalfWidth = Phaser.Math.Between(100, 180);
-      const enemyDef = {
-        type: "angel",
-        behavior: undefined,
-        x: point.x,
-        y: point.y,
-        patrol: {
-          left: Phaser.Math.Clamp(point.x - patrolHalfWidth, 40, ROOM_DIMENSIONS.width - 120),
-          right: Phaser.Math.Clamp(point.x + patrolHalfWidth, 120, ROOM_DIMENSIONS.width - 40),
-          y: point.y
-        }
-      };
-      this.spawnEnemy(enemyDef, room);
-      spawned += 1;
-    }
-
-    if (spawned > 0) {
-      EventBus.emit("ambush-spawned", {
-        count: spawned,
-        threatTier,
-        source,
-        roomId: GameState.currentRoomId
-      });
-    }
-    return spawned;
+    return 0;
   }
 
   getAmbushProfile(roomId, threatTier) {

@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { GameState } from "../core/GameState";
 
 const ENEMY_SCALE = 0.46;
 const PATROL_SPEED = 78;
@@ -320,6 +321,9 @@ export class EnemyDemon extends Phaser.Physics.Arcade.Sprite {
     if (this.isDead) return false;
 
     this.health -= amount;
+    if (this.isRoomEnemy && this.spawnRoomId && this.spawnEnemyId) {
+      GameState.setRoomEnemyHealth(this.spawnRoomId, this.spawnEnemyId, this.health);
+    }
     this.setTint(0xff5f5f);
     this.scene.time.delayedCall(90, () => {
       if (this.active) this.clearTint();
@@ -332,6 +336,10 @@ export class EnemyDemon extends Phaser.Physics.Arcade.Sprite {
 
     if (this.health <= 0) {
       this.isDead = true;
+      if (this.isRoomEnemy && this.spawnRoomId && this.spawnEnemyId) {
+        GameState.setRoomEnemyHealth(this.spawnRoomId, this.spawnEnemyId, 0);
+        GameState.markRoomEnemyDefeated(this.spawnRoomId, this.spawnEnemyId);
+      }
       this.body.setVelocity(0, 0);
       this.disableBody(true, true);
       return true;
