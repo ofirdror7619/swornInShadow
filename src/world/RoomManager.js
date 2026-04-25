@@ -70,6 +70,11 @@ const BG_CEILING_TILT_MS = 3400;
 const ATMOSPHERE_BACK_DEPTH = 250;
 const ATMOSPHERE_GLOW_DEPTH = 252;
 const COLOR_GRADE_DEPTH = 1800;
+const VISION_MASK_TEXTURE_KEY = "vision-soft-mask";
+const VISION_MASK_CORE_RADIUS = 218;
+const VISION_MASK_OUTER_RADIUS = 292;
+const VISION_DARKNESS_ALPHA = 0.86;
+const VISION_EDGE_RING_RADIUS = 244;
 const WORLD_DEPTH_BASE = 300;
 const PLATFORM_DEPTH = 460;
 const ROOM_GATE_DEPTH = 620;
@@ -159,6 +164,7 @@ export class RoomManager {
     this.ceilingTiltTween = null;
     this.atmosphereFx = [];
     this.colorGradeOverlay = null;
+    this.visionMask = null;
     this.isTransitioning = false;
     this.corruption = 0;
     this.corruptionTier = 0;
@@ -599,9 +605,8 @@ export class RoomManager {
     smokeField.setDepth(ATMOSPHERE_BACK_DEPTH - 2);
     this.trackAtmosphereFx(smokeField);
 
-    this.createLampGlowField();
     this.createHeatFromPlatforms(room);
-    this.createColorGradingOverlay();
+    this.createVisibilityMask();
   }
 
   createLampGlowField() {
@@ -681,34 +686,99 @@ export class RoomManager {
     }
   }
 
-  createColorGradingOverlay() {
-    const w = this.scene.scale.width;
-    const h = this.scene.scale.height;
+  createVisibilityMask() {
+    this.ensureVisionMaskTexture();
 
-    const vignette = this.scene.add.rectangle(w * 0.5, h * 0.5, w, h, 0x120709, 0.22);
-    vignette.setScrollFactor(0);
-    vignette.setDepth(COLOR_GRADE_DEPTH);
-    this.trackAtmosphereFx(vignette);
-
-    const warmCore = this.scene.add.circle(
-      this.player?.x ?? ROOM_DIMENSIONS.width * 0.5,
-      (this.player?.y ?? ROOM_DIMENSIONS.height * 0.5) + 8,
-      Math.max(235, Math.min(w, h) * 0.33),
-      0xff8f52,
-      0.1
+    const darkness = this.scene.add.rectangle(
+      ROOM_DIMENSIONS.width * 0.5,
+      ROOM_DIMENSIONS.height * 0.5,
+      ROOM_DIMENSIONS.width,
+      ROOM_DIMENSIONS.height,
+      0x020205,
+      VISION_DARKNESS_ALPHA
     );
-    warmCore.setDepth(ATMOSPHERE_GLOW_DEPTH + 1);
-    warmCore.setBlendMode("ADD");
-    this.trackAtmosphereFx(warmCore);
+    darkness.setDepth(COLOR_GRADE_DEPTH);
+    this.trackAtmosphereFx(darkness);
 
-    this.colorGradeOverlay = { vignette, warmCore };
+    const maskImage = this.scene.make.image({
+      x: this.player?.x ?? ROOM_DIMENSIONS.width * 0.5,
+      y: this.player?.y ?? ROOM_DIMENSIONS.height * 0.5,
+      key: VISION_MASK_TEXTURE_KEY,
+      add: false
+    });
+    const mask = maskImage.createBitmapMask();
+    mask.invertAlpha = true;
+    darkness.setMask(mask);
+
+    const edgeRing = this.scene.add.circle(
+      maskImage.x,
+      maskImage.y,
+      VISION_EDGE_RING_RADIUS,
+      0x000000,
+      0
+    );
+    edgeRing.setDepth(COLOR_GRADE_DEPTH + 1);
+    edgeRing.setStrokeStyle(22, 0x13080d, 0.3);
+    this.trackAtmosphereFx(edgeRing);
+
+    const emberEdge = this.scene.add.circle(
+      maskImage.x,
+      maskImage.y,
+      VISION_EDGE_RING_RADIUS - 8,
+      0x000000,
+      0
+    );
+    emberEdge.setDepth(COLOR_GRADE_DEPTH + 2);
+    emberEdge.setStrokeStyle(2, 0x8a2e22, 0.16);
+    this.trackAtmosphereFx(emberEdge);
+
+    this.scene.tweens.add({
+      targets: [edgeRing, emberEdge],
+      alpha: { from: 0.72, to: 1 },
+      scale: { from: 0.985, to: 1.018 },
+      duration: 1150,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.visionMask = { darkness, maskImage, mask, edgeRing, emberEdge };
+    this.updateAtmosphereRuntime();
+  }
+
+  ensureVisionMaskTexture() {
+    if (this.scene.textures.exists(VISION_MASK_TEXTURE_KEY)) return;
+
+    const padding = 10;
+    const size = Math.ceil((VISION_MASK_OUTER_RADIUS + padding) * 2);
+    const center = size * 0.5;
+    const texture = this.scene.textures.createCanvas(VISION_MASK_TEXTURE_KEY, size, size);
+    const ctx = texture.getContext();
+    const gradient = ctx.createRadialGradient(
+      center,
+      center,
+      VISION_MASK_CORE_RADIUS,
+      center,
+      center,
+      VISION_MASK_OUTER_RADIUS
+    );
+
+    gradient.addColorStop(0, "rgba(255,255,255,1)");
+    gradient.addColorStop(0.58, "rgba(255,255,255,0.82)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    texture.refresh();
   }
 
   updateAtmosphereRuntime() {
-    if (!this.colorGradeOverlay?.warmCore?.active || !this.player?.active) return;
+    if (!this.visionMask?.maskImage || !this.player?.active) return;
 
-    this.colorGradeOverlay.warmCore.setPosition(this.player.x, this.player.y + 8);
-    this.colorGradeOverlay.warmCore.setDepth(Math.max(ATMOSPHERE_GLOW_DEPTH + 1, this.depthForY(this.player.y, -18)));
+    this.visionMask.maskImage.setPosition(this.player.x, this.player.y);
+    this.visionMask.edgeRing?.setPosition(this.player.x, this.player.y);
+    this.visionMask.emberEdge?.setPosition(this.player.x, this.player.y);
   }
 
   trackAtmosphereFx(displayObject) {
@@ -722,6 +792,9 @@ export class RoomManager {
     }
     this.atmosphereFx = [];
     this.colorGradeOverlay = null;
+    this.visionMask?.mask?.destroy?.();
+    this.visionMask?.maskImage?.destroy?.();
+    this.visionMask = null;
   }
 
   spawnRelicDrop(x, y) {
